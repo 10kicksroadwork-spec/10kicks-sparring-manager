@@ -1,0 +1,64 @@
+"use client";
+
+import { use, useEffect, useState } from "react";
+import { api, locationLabel } from "@/components/common/client";
+
+type Assignment = { assignmentId: string; blockIndex: number; location: string; fighterId: string; volunteerId: string; status: string };
+type View = {
+  session: { dateLocal: string; timezone: string; revision: number };
+  attendance: { athleteId: string; displayName: string; assignedRole: string }[];
+  assignments: Assignment[];
+};
+
+export default function PrintPage({ params }: { params: Promise<{ sessionId: string }> }) {
+  const { sessionId } = use(params);
+  const [view, setView] = useState<View | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    void api<View>(`/api/sessions/${sessionId}/print`).then((result) => {
+      if (!result.ok) setError(result.error.message);
+      else setView(result.data);
+    });
+  }, [sessionId]);
+
+  const names = new Map(view?.attendance.map((row) => [row.athleteId, row.displayName]) ?? []);
+  const blocks = [...new Set(view?.assignments.map((row) => row.blockIndex) ?? [])].sort((a, b) => a - b);
+
+  return (
+    <main className="print-sheet mx-auto max-w-3xl bg-white px-6 py-8 text-black">
+      <p className="text-sm tracking-[0.18em]">10 KICKS</p>
+      <h1 className="font-display text-4xl">Hard sparring rundown</h1>
+      <p>{view?.session.dateLocal} · {view?.session.timezone} · revision {view?.session.revision}</p>
+      <p className="mt-2 text-sm">Each hard match is two rounds. Light/recovery is a placeholder and is not an assigned partner.</p>
+      {error ? <p role="alert">{error}</p> : null}
+      <table className="mt-4 w-full border-collapse text-left text-sm">
+        <thead>
+          <tr>
+            <th className="border-b border-black py-2">Block</th>
+            <th className="border-b border-black py-2">Main ring</th>
+            <th className="border-b border-black py-2">Floor 1</th>
+            <th className="border-b border-black py-2">Floor 2</th>
+          </tr>
+        </thead>
+        <tbody>
+          {blocks.map((block) => (
+            <tr key={block}>
+              <td className="border-b border-neutral-300 py-2">{block}</td>
+              {["MAIN_RING", "FLOOR_1", "FLOOR_2"].map((location) => {
+                const match = view?.assignments.find((row) => row.blockIndex === block && row.location === location);
+                return (
+                  <td key={location} className="border-b border-neutral-300 py-2">
+                    {match ? `${names.get(match.fighterId) ?? "Unknown"} / ${names.get(match.volunteerId) ?? "Unknown"} · 2 rounds${match.status === "INTERRUPTED" ? " · interrupted" : ""}` : "Open"}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <button className="no-print mt-6 underline" type="button" onClick={() => window.print()} data-testid="print-rundown">Print or save PDF</button>
+      <p className="sr-only">{blocks.map((block) => locationLabel("MAIN_RING") + block).join(" ")}</p>
+    </main>
+  );
+}
