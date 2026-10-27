@@ -110,13 +110,12 @@ describe("Saturday rules", () => {
     });
   });
 
-  it("schedules 5 fighters and 15 volunteers with prefix packing and one block per volunteer", () => {
+  it("schedules 5 fighters in ~6 blocks with prefix packing and one block per volunteer", () => {
     const full = solve(demoInput());
     expect(full.status).toBe("FEASIBLE");
     if (full.status !== "FEASIBLE") return;
-    // Prefix packing needs Main in every occupied block; with unique locations that
-    // first fits at horizon 9 (5 occupied full blocks) — not an artificial stretch.
-    expect(full.blockCount).toBe(9);
+    // Short card + hard left-pack; location repeats allowed when packing needs them.
+    expect(full.blockCount).toBe(6);
     expect(full.assignments).toHaveLength(15);
     expect(full.optimality).toBe("PROVEN");
     const validation = validateSchedule(demoInput(), full.assignments);
@@ -126,7 +125,6 @@ describe("Saturday rules", () => {
       const mine = full.assignments.filter((a) => a.fighterId === fighterId);
       expect(mine).toHaveLength(3);
       expect(new Set(mine.map((a) => a.volunteerId)).size).toBe(3);
-      expect(new Set(mine.map((a) => a.location))).toEqual(new Set(LOCATIONS));
       const blocks = mine.map((a) => a.blockIndex).sort((a, b) => a - b);
       expect(blocks[1] - blocks[0]).toBeGreaterThanOrEqual(2);
       expect(blocks[2] - blocks[1]).toBeGreaterThanOrEqual(2);
@@ -148,6 +146,10 @@ describe("Saturday rules", () => {
     for (const block of new Set(full.assignments.map((row) => row.blockIndex))) {
       const locs = full.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
       expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+      // No Block-4/6 holes: never Main+Front without Back, never Back+Front without Main.
+      const set = new Set(locs);
+      expect(set.has("MAIN_RING") && set.has("FLOOR_2") && !set.has("FLOOR_1")).toBe(false);
+      expect(set.has("FLOOR_1") && set.has("FLOOR_2") && !set.has("MAIN_RING")).toBe(false);
     }
 
     for (const assignment of full.assignments) {
@@ -163,10 +165,10 @@ describe("Saturday rules", () => {
     }
 
     const blocked = solve(demoInput(), 8000, 1);
-    const tooShort = solve({ ...demoInput(), maxBlockHorizon: 8 });
-    expect(tooShort.status).toBe("UNSAT");
-    if (tooShort.status === "UNSAT") {
-      expect(tooShort.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
+    const five = solve({ ...demoInput(), maxBlockHorizon: 5 });
+    expect(five.status).toBe("UNSAT");
+    if (five.status === "UNSAT") {
+      expect(five.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
     }
     expect(blocked.status).toBe("FEASIBLE");
   });

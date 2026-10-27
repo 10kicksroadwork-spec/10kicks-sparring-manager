@@ -38,17 +38,23 @@ export function leftPackPenalty(usedLocations: Iterable<Location>, pool: Locatio
   return penalty;
 }
 
-/** Sort location plans so Main→Back→Front packing is tried first. */
+/**
+ * Sort location plans: prefix pack first, then fewer per-fighter repeats
+ * (variety is preferred but packing + short cards may repeat locations).
+ */
 export function sortPlansByLeftPack(
   plans: Location[][],
   pool: Location[],
   fixedLocations: Iterable<Location> = [],
+  repeatCost: (plan: Location[]) => number = () => 0,
 ): Location[][] {
   const fixed = [...fixedLocations];
   return plans.slice().sort((a, b) => {
     const penaltyGap =
       leftPackPenalty([...fixed, ...a], pool) - leftPackPenalty([...fixed, ...b], pool);
     if (penaltyGap !== 0) return penaltyGap;
+    const repeatGap = repeatCost(a) - repeatCost(b);
+    if (repeatGap !== 0) return repeatGap;
     return a.join().localeCompare(b.join());
   });
 }

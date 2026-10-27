@@ -85,8 +85,8 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
       }
       if (found.assignments) {
         const pool = locationsForFighterCount(scheduledFighterCount(input));
-        const allowRepeat = pool.length < input.requiredHardSessions;
-        const packed = compactScheduleBlocksToPrefix(found.assignments, pool, allowRepeat);
+        // Packing may repeat locations; compaction is allowed to remapping freely.
+        const packed = compactScheduleBlocksToPrefix(found.assignments, pool, true);
         const validation = validateSchedule(input, packed);
         if (!validation.ok) {
           return {
@@ -323,61 +323,7 @@ function lowerBound(input: ScheduleInput, prep: Prep): number {
   const spacingBound = 1 + (input.requiredHardSessions - 1) * (input.restGapBlocks + 1);
   const fixedMax = input.fixedAssignments.reduce((max, a) => Math.max(max, a.blockIndex), 0);
   const basic = Math.max(capacityBound, input.requiredHardSessions === 3 ? 5 : spacingBound);
-  let bound = Math.max(basic, spacingBound, fixedMax, prep.demand > 0 ? 1 : 0);
-  // Prefix packing needs Main in every occupied block. With no location repeats that
-  // means occupied blocks ≤ fighters — raise the horizon to the first cover that fits.
-  if (mats >= input.requiredHardSessions && input.fighters.length > 0) {
-    const maxH = Math.max(bound, input.maxBlockHorizon);
-    for (let horizon = bound; horizon <= maxH; horizon += 1) {
-      if (
-        patternCoverAllowsPrefixPack(
-          horizon,
-          input.fighters.length,
-          mats,
-          input.requiredHardSessions,
-          input.restGapBlocks,
-        )
-      ) {
-        bound = Math.max(bound, horizon);
-        break;
-      }
-    }
-  }
-  return bound;
-}
-
-/** True when some fighter block-pattern cover has load ≤ mats and occupied blocks ≤ fighters. */
-function patternCoverAllowsPrefixPack(
-  horizon: number,
-  fighterCount: number,
-  mats: number,
-  sessions: number,
-  restGap: number,
-): boolean {
-  const patterns = blockPatterns(horizon, sessions, restGap);
-  if (patterns.length === 0) return false;
-  const load = new Array<number>(horizon + 1).fill(0);
-  let found = false;
-  const walk = (index: number) => {
-    if (found) return;
-    if (index === fighterCount) {
-      let occupied = 0;
-      for (let block = 1; block <= horizon; block += 1) {
-        if (load[block] > 0) occupied += 1;
-      }
-      if (occupied <= fighterCount) found = true;
-      return;
-    }
-    for (const pattern of patterns) {
-      if (pattern.some((block) => load[block] >= mats)) continue;
-      for (const block of pattern) load[block] += 1;
-      walk(index + 1);
-      for (const block of pattern) load[block] -= 1;
-      if (found) return;
-    }
-  };
-  walk(0);
-  return found;
+  return Math.max(basic, spacingBound, fixedMax, prep.demand > 0 ? 1 : 0);
 }
 
 function blockPatterns(horizon: number, count: number, restGap: number): number[][] {
@@ -403,14 +349,14 @@ function blockPatterns(horizon: number, count: number, restGap: number): number[
 
 /**
  * Location plans for one block's open fighters. Hard-filters to pool-prefix
- * packs (Main → Back Mat → Front Mat) so empty slots only sit on the right.
+ * packs (Main → Back Mat → Front Mat). Location repeats are allowed so short
+ * cards can still pack; plans that avoid repeats are tried first.
  */
 function blockLocationPlans(
   fighters: string[],
   pool: Location[],
   usedLoc: Map<string, Set<Location>>,
   blockMask: number,
-  allowRepeat: boolean,
 ): Location[][] {
   if (fighters.length === 0) return [[]];
   const plans: Location[][] = [];
@@ -419,12 +365,9 @@ function blockLocationPlans(
       plans.push(current.slice());
       return;
     }
-    const fighterId = fighters[index];
-    const used = usedLoc.get(fighterId) ?? new Set();
     for (const location of pool) {
       if ((mask & LOCATION_BIT[location]) !== 0) continue;
       if ((blockMask & LOCATION_BIT[location]) !== 0) continue;
-      if (!allowRepeat && used.has(location)) continue;
       current.push(location);
       walk(index + 1, current, mask | LOCATION_BIT[location]);
       current.pop();
@@ -435,7 +378,11 @@ function blockLocationPlans(
   for (const location of pool) {
     if (blockMask & LOCATION_BIT[location]) fixed.push(location);
   }
-  return filterPrefixPlans(sortPlansByLeftPack(plans, pool, fixed), pool, fixed);
+  const repeatCost = (plan: Location[]) =>
+    plan.reduce((total, location, index) => {
+      return total + (usedLoc.get(fighters[index])?.has(location) ? 1 : 0);
+    }, 0);
+  return filterPrefixPlans(sortPlansByLeftPack(plans, pool, fixed, repeatCost), pool, fixed);
 }
 
 function searchHorizon(
@@ -532,16 +479,6 @@ function searchHorizon(
       return undefined;
     }
     if (index === order.length) {
-      const allowRepeat =
-        locationsForFighterCount(scheduledFighterCount(input)).length < input.requiredHardSessions;
-      if (!allowRepeat) {
-        let occupied = 0;
-        for (let block = 1; block <= horizon; block += 1) {
-          if (load[block] > 0) occupied += 1;
-        }
-        // Prefix packing needs one Main ring slot per occupied block.
-        if (occupied > input.fighters.length) return undefined;
-      }
       return assignLocations(input, prep, chosen, order, blockLocMask, blockPeople, deadline, volunteerCap, () => {
         timedOut = true;
       });
@@ -586,7 +523,6 @@ function assignLocations(
   markTimeout: () => void,
 ): Assignment[] | undefined {
   const pool = locationsForFighterCount(scheduledFighterCount(input));
-  const allowRepeat = pool.length < input.requiredHardSessions;
   const placed = new Map<string, Map<number, Location>>();
   const usedLoc = new Map<string, Set<Location>>();
 
@@ -626,7 +562,18 @@ function assignLocations(
     }
     const block = blocks[blockIndex];
     const fighters = blockFighters.get(block) ?? [];
-    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block], allowRepeat);
+    const refreshUsed = (fighterId: string) => {
+      usedLoc.set(fighterId, new Set(placed.get(fighterId)?.values() ?? []));
+    };
+    const undoApplied = (applied: Array<{ fighterId: string; location: Location }>) => {
+      for (const row of applied) {
+        blockLocMask[block] &= ~LOCATION_BIT[row.location];
+        placed.get(row.fighterId)?.delete(block);
+        refreshUsed(row.fighterId);
+      }
+    };
+    // Location repeats allowed so ~6-block cards can still prefix-pack every block.
+    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block]);
     for (const plan of plans) {
       const applied: Array<{ fighterId: string; location: Location }> = [];
       let ok = true;
@@ -637,41 +584,25 @@ function assignLocations(
           ok = false;
           break;
         }
-        if (!allowRepeat && usedLoc.get(fighterId)?.has(location)) {
-          ok = false;
-          break;
-        }
         blockLocMask[block] |= LOCATION_BIT[location];
         placed.get(fighterId)?.set(block, location);
-        usedLoc.get(fighterId)?.add(location);
+        refreshUsed(fighterId);
         applied.push({ fighterId, location });
       }
       if (!ok) {
-        for (const row of applied) {
-          blockLocMask[block] &= ~LOCATION_BIT[row.location];
-          placed.get(row.fighterId)?.delete(block);
-          usedLoc.get(row.fighterId)?.delete(row.location);
-        }
+        undoApplied(applied);
         continue;
       }
       // Refuse mid-search holes (Block 4: Main+Front / Block 6: Back+Front).
-      const blockLocs = [...(placed.values())]
+      const blockLocs = [...placed.values()]
         .map((mapping) => mapping.get(block))
         .filter((location): location is Location => location !== undefined);
       if (!isContiguousLeftPack(blockLocs, pool)) {
-        for (const row of applied) {
-          blockLocMask[block] &= ~LOCATION_BIT[row.location];
-          placed.get(row.fighterId)?.delete(block);
-          usedLoc.get(row.fighterId)?.delete(row.location);
-        }
+        undoApplied(applied);
         continue;
       }
       const done = walk(blockIndex + 1);
-      for (const row of applied) {
-        blockLocMask[block] &= ~LOCATION_BIT[row.location];
-        placed.get(row.fighterId)?.delete(block);
-        usedLoc.get(row.fighterId)?.delete(row.location);
-      }
+      undoApplied(applied);
       if (done) return done;
       if (Date.now() >= deadline) {
         markTimeout();
