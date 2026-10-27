@@ -36,8 +36,17 @@ export const limitsSchema = z.object({
   maxAggressionDifference: z.number().int().min(0).max(4),
 });
 
+/** Round length in minutes: 1–15 in half-minute steps (2, 2.5, 3, …). */
+function isHalfMinuteStep(value: number): boolean {
+  return Number.isFinite(value) && Math.abs(value * 2 - Math.round(value * 2)) < 1e-9;
+}
+
 export const timingSchema = z.object({
-  roundMinutes: z.number().int().min(1).max(15),
+  roundMinutes: z
+    .number()
+    .min(1)
+    .max(15)
+    .refine(isHalfMinuteStep, { message: "Round minutes must be in half-minute steps (1, 1.5, …, 15)" }),
   restSeconds: z.number().int().min(0).max(300),
 });
 
