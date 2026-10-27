@@ -305,5 +305,13 @@ export function createSupabaseRepository(): SparringRepository {
       const { error } = await getSupabaseAdmin().rpc("commit_sparring_batch", { batch });
       if (error) throw storeFailed();
     },
+    async deleteSessionCascade(sessionId: string) {
+      const db = getSupabaseAdmin();
+      // Child tables reference sessions without ON DELETE CASCADE — delete explicitly.
+      for (const table of ["assignments", "attendance", "overrides", "audit_log", "sessions"] as const) {
+        const { error } = await db.from(table).delete().eq("session_id", sessionId);
+        if (error) throw storeFailed();
+      }
+    },
   };
 }

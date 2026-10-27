@@ -6,7 +6,8 @@ export type Action =
   | "editRoster"
   | "deactivateAthlete"
   | "manageRestrictions"
-  | "cancelSession";
+  | "cancelSession"
+  | "deleteSession";
 
 const RANK: Record<Role, number> = { viewer: 1, coach: 2, admin: 3 };
 
@@ -32,5 +33,6 @@ export function roleForEmail(email: string | null | undefined): Role | null {
 export function can(role: Role, action: Action): boolean {
   if (action === "read") return RANK[role] >= RANK.viewer;
   if (action === "manageRestrictions" || action === "deactivateAthlete") return role === "admin";
+  if (action === "cancelSession" || action === "deleteSession") return RANK[role] >= RANK.coach;
   return RANK[role] >= RANK.coach;
 }

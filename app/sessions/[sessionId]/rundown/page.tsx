@@ -17,12 +17,14 @@ type Assignment = {
   status: "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "INTERRUPTED";
   locked: boolean;
 };
+type SwapOption = { volunteerId: string; displayName: string; current: boolean; reasons: string[] };
 type Person = { athleteId: string; displayName: string; assignedRole: "FIGHTER" | "VOLUNTEER"; availabilityStatus: string };
 type View = {
   session: { revision: number; status: string; updatedAt: string; activeGenerationId: string; settings: { timing: RoundTiming; hardRoundsPerSession: number } };
   attendance: Person[];
   assignments: Assignment[];
   corrupt: string[];
+  swaps?: Record<string, SwapOption[]>;
 };
 
 const ALL_LOCATIONS: Location[] = ["MAIN_RING", "FLOOR_1", "FLOOR_2"];
@@ -34,18 +36,35 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const [swapChoice, setSwapChoice] = useState<Record<string, string>>({});
 
   async function reload() {
     const result = await api<View>(`/api/sessions/${sessionId}`);
     if (!result.ok) setError(result.error.message);
-    else setView(result.data);
+    else {
+      setView(result.data);
+      const next: Record<string, string> = {};
+      for (const [assignmentId, options] of Object.entries(result.data.swaps ?? {})) {
+        const current = options.find((row) => row.current) ?? options[0];
+        if (current) next[assignmentId] = current.volunteerId;
+      }
+      setSwapChoice(next);
+    }
   }
   useEffect(() => {
     let ignore = false;
     void api<View>(`/api/sessions/${sessionId}`).then((result) => {
       if (ignore) return;
       if (!result.ok) setError(result.error.message);
-      else setView(result.data);
+      else {
+        setView(result.data);
+        const next: Record<string, string> = {};
+        for (const [assignmentId, options] of Object.entries(result.data.swaps ?? {})) {
+          const current = options.find((row) => row.current) ?? options[0];
+          if (current) next[assignmentId] = current.volunteerId;
+        }
+        setSwapChoice(next);
+      }
     });
     return () => {
       ignore = true;
@@ -70,6 +89,30 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     setBusy(false);
     if (!result.ok) setError(result.error.message);
     else setNotice("Saved.");
+    await reload();
+  }
+
+  async function swapVolunteer(match: Assignment) {
+    const volunteerId = swapChoice[match.assignmentId];
+    if (!volunteerId || volunteerId === match.volunteerId) {
+      setError("Pick a different eligible volunteer for this match.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const result = await api(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        requestId: newRequestId(),
+        expectedRevision: revision,
+        action: "set-volunteer",
+        volunteerId,
+      }),
+    });
+    setBusy(false);
+    if (!result.ok) setError(result.error.message);
+    else setNotice(`Partner updated for ${name(match.fighterId)}.`);
     await reload();
   }
 
@@ -138,6 +181,8 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
               <div className="mt-3 grid gap-2">
                 {columns.map((location) => {
                   const match = rows.find((row) => row.location === location);
+                  const options = match ? view?.swaps?.[match.assignmentId] ?? [] : [];
+                  const canSwap = Boolean(match && !match.locked && match.status === "PLANNED");
                   return (
                     <article key={location} className="rounded-xl border border-[var(--line)] p-3">
                       <p className="text-xs uppercase tracking-[0.14em] text-[var(--gold)]">{locationLabel(location)}</p>
@@ -148,6 +193,39 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                           <div className="mt-2 flex flex-wrap gap-2">
                             <button className="tap" type="button" disabled={busy} data-testid={`lock-${match.assignmentId}`} onClick={() => void act(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, { action: match.locked ? "unlock" : "lock" }, "PATCH")}>{match.locked ? "Unlock match" : "Lock match"}</button>
                           </div>
+                          {canSwap ? (
+                            <div className="mt-3 grid gap-2 border-t border-[var(--line)] pt-3" data-testid={`swap-${match.assignmentId}`}>
+                              <label className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]" htmlFor={`swap-select-${match.assignmentId}`}>
+                                Eligible partner
+                              </label>
+                              <select
+                                id={`swap-select-${match.assignmentId}`}
+                                className="field"
+                                data-testid={`swap-select-${match.assignmentId}`}
+                                disabled={busy || options.length === 0}
+                                value={swapChoice[match.assignmentId] ?? match.volunteerId}
+                                onChange={(event) => setSwapChoice((prev) => ({ ...prev, [match.assignmentId]: event.target.value }))}
+                              >
+                                {options.map((option) => (
+                                  <option key={option.volunteerId} value={option.volunteerId}>
+                                    {option.displayName}{option.current ? " (current)" : ""}
+                                  </option>
+                                ))}
+                              </select>
+                              <button
+                                className="tap"
+                                type="button"
+                                disabled={busy || !swapChoice[match.assignmentId] || swapChoice[match.assignmentId] === match.volunteerId}
+                                data-testid={`swap-apply-${match.assignmentId}`}
+                                onClick={() => void swapVolunteer(match)}
+                              >
+                                Swap partner
+                              </button>
+                              <p className="text-xs text-[var(--muted)]">
+                                Only volunteers who still fit limits, rest, and workload for this card. Free someone from another match first if you need them here.
+                              </p>
+                            </div>
+                          ) : null}
                         </>
                       ) : <p>Open</p>}
                     </article>

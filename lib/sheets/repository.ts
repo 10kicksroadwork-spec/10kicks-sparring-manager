@@ -173,6 +173,11 @@ export function createSheetsRepository(): SparringRepository {
         }),
       );
     },
+    async deleteSessionCascade() {
+      const error = new Error("Session delete is not supported on the Sheets store");
+      error.name = "STORE_FAILED";
+      throw error;
+    },
   };
 }
 
