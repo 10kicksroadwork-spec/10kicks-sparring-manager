@@ -24,8 +24,19 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
     if (code === "EMPTY_VOLUNTEER_ATTENDANCE" || code === "ROLE_CONFLICT") {
       steps.add("Check people in on the volunteer list. One person takes one role this Saturday and is not paired with themselves.");
     }
-    if (code === "FIXED_ASSIGNMENT_CONFLICT" || code === "REST_SPACING_CONFLICT" || code === "LOCATION_COVERAGE_CONFLICT") {
+    if (
+      code === "FIXED_ASSIGNMENT_CONFLICT" ||
+      code === "REST_SPACING_CONFLICT" ||
+      code === "LOCATION_COVERAGE_CONFLICT" ||
+      code === "MAIN_RING_REQUIRED"
+    ) {
       steps.add("Unlock or resolve the completed match that conflicts, then generate again. Completed work stays put.");
+    }
+    if (code === "MAIN_RING_REQUIRED") {
+      steps.add("Every occupied block must use Main ring. Move a floor match up to Main ring, or clear the floors.");
+    }
+    if (code === "VOLUNTEER_REUSE_WHEN_AVOIDABLE") {
+      steps.add("Enough volunteers were available for one block each. Prefer single-block use unless you intentionally swapped someone into a second block.");
     }
     if (code === "SEARCH_BUDGET_EXHAUSTED") {
       steps.add("This is not proof that a schedule is impossible. Retry generation, or remove a constraint and try again.");
