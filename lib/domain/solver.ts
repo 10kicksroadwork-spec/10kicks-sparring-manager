@@ -1,4 +1,10 @@
 import { diagnostic } from "./diagnostics";
+import {
+  compactScheduleBlocksToPrefix,
+  filterPrefixPlans,
+  isContiguousLeftPack,
+  sortPlansByLeftPack,
+} from "./location-packing";
 import { evaluatePair } from "./matchmaking";
 import { pairCompatibility, scoreSchedule } from "./scoring";
 import { validateSchedule } from "./validator";
@@ -78,7 +84,10 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
         return timeoutResult(found.assignments);
       }
       if (found.assignments) {
-        const validation = validateSchedule(input, found.assignments);
+        const pool = locationsForFighterCount(scheduledFighterCount(input));
+        // Packing may repeat locations; compaction is allowed to remapping freely.
+        const packed = compactScheduleBlocksToPrefix(found.assignments, pool, true);
+        const validation = validateSchedule(input, packed);
         if (!validation.ok) {
           return {
             status: "UNSAT",
@@ -98,7 +107,7 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
         } else {
           notes.unshift("Valid schedule — not proven shortest.");
         }
-        return feasible(input, found.assignments, optimality, notes);
+        return feasible(input, packed, optimality, notes);
       }
       smallerExhausted = true;
     }
@@ -210,7 +219,7 @@ function prepare(input: ScheduleInput): Prep {
       "EXPLICIT_EXCLUSION",
       "VOLUNTEER_MAX_EXCEEDED",
       "LOCATION_COVERAGE_CONFLICT",
-      "MAIN_RING_REQUIRED",
+      "LOCATION_PACKING_HOLE",
       "DUPLICATE_PAIRING",
       "VOLUNTEER_SAME_FIGHTER",
       "SESSION_COUNT",
@@ -314,53 +323,7 @@ function lowerBound(input: ScheduleInput, prep: Prep): number {
   const spacingBound = 1 + (input.requiredHardSessions - 1) * (input.restGapBlocks + 1);
   const fixedMax = input.fixedAssignments.reduce((max, a) => Math.max(max, a.blockIndex), 0);
   const basic = Math.max(capacityBound, input.requiredHardSessions === 3 ? 5 : spacingBound);
-  let bound = Math.max(basic, spacingBound, fixedMax, prep.demand > 0 ? 1 : 0);
-  // Main ring in every occupied block + one Main ring per fighter (no location repeat)
-  // means occupied blocks ≤ fighter count. Raise the horizon until that cover exists.
-  if (mats >= input.requiredHardSessions && input.fighters.length > 0) {
-    const maxH = Math.max(bound, input.maxBlockHorizon);
-    for (let horizon = bound; horizon <= maxH; horizon += 1) {
-      if (patternCoverFitsMainRing(horizon, input.fighters.length, mats, input.requiredHardSessions, input.restGapBlocks)) {
-        bound = Math.max(bound, horizon);
-        break;
-      }
-    }
-  }
-  return bound;
-}
-
-/** True when some fighter block-pattern cover has load ≤ mats and occupied blocks ≤ fighters. */
-function patternCoverFitsMainRing(
-  horizon: number,
-  fighterCount: number,
-  mats: number,
-  sessions: number,
-  restGap: number,
-): boolean {
-  const patterns = blockPatterns(horizon, sessions, restGap);
-  if (patterns.length === 0) return false;
-  const load = new Array<number>(horizon + 1).fill(0);
-  let found = false;
-  const walk = (index: number) => {
-    if (found) return;
-    if (index === fighterCount) {
-      let occupied = 0;
-      for (let block = 1; block <= horizon; block += 1) {
-        if (load[block] > 0) occupied += 1;
-      }
-      if (occupied <= fighterCount) found = true;
-      return;
-    }
-    for (const pattern of patterns) {
-      if (pattern.some((block) => load[block] >= mats)) continue;
-      for (const block of pattern) load[block] += 1;
-      walk(index + 1);
-      for (const block of pattern) load[block] -= 1;
-      if (found) return;
-    }
-  };
-  walk(0);
-  return found;
+  return Math.max(basic, spacingBound, fixedMax, prep.demand > 0 ? 1 : 0);
 }
 
 function blockPatterns(horizon: number, count: number, restGap: number): number[][] {
@@ -384,64 +347,42 @@ function blockPatterns(horizon: number, count: number, restGap: number): number[
   return out;
 }
 
-/** Every occupied block must use Main ring — never leave it Open while mats have matches. */
-function everyOccupiedBlockUsesMainRing(placed: Map<string, Map<number, Location>>): boolean {
-  const byBlock = new Map<number, Set<Location>>();
-  for (const mapping of placed.values()) {
-    for (const [block, location] of mapping) {
-      let set = byBlock.get(block);
-      if (!set) {
-        set = new Set();
-        byBlock.set(block, set);
-      }
-      set.add(location);
-    }
-  }
-  for (const locations of byBlock.values()) {
-    if (locations.size > 0 && !locations.has("MAIN_RING")) return false;
-  }
-  return true;
-}
-
 /**
- * Location plans for one block's open fighters. Always packs Main ring first when the
- * block does not already have it from a locked/completed match.
+ * Location plans for one block's open fighters. Hard-filters to pool-prefix
+ * packs (Main → Back Mat → Front Mat). Location repeats are allowed so short
+ * cards can still pack; plans that avoid repeats are tried first.
  */
 function blockLocationPlans(
   fighters: string[],
   pool: Location[],
   usedLoc: Map<string, Set<Location>>,
   blockMask: number,
-  allowRepeat: boolean,
-  requireMainRing: boolean,
 ): Location[][] {
   if (fighters.length === 0) return [[]];
   const plans: Location[][] = [];
   const walk = (index: number, current: Location[], mask: number) => {
     if (index === fighters.length) {
-      const hasMain = (mask & LOCATION_BIT.MAIN_RING) !== 0 || (blockMask & LOCATION_BIT.MAIN_RING) !== 0;
-      if (requireMainRing && !hasMain) return;
       plans.push(current.slice());
       return;
     }
-    const fighterId = fighters[index];
-    const used = usedLoc.get(fighterId) ?? new Set();
-    const needMain =
-      requireMainRing && (mask & LOCATION_BIT.MAIN_RING) === 0 && (blockMask & LOCATION_BIT.MAIN_RING) === 0;
-    const ordered = needMain
-      ? ["MAIN_RING" as Location, ...pool.filter((location) => location !== "MAIN_RING")]
-      : pool;
-    for (const location of ordered) {
+    for (const location of pool) {
       if ((mask & LOCATION_BIT[location]) !== 0) continue;
       if ((blockMask & LOCATION_BIT[location]) !== 0) continue;
-      if (!allowRepeat && used.has(location)) continue;
       current.push(location);
       walk(index + 1, current, mask | LOCATION_BIT[location]);
       current.pop();
     }
   };
   walk(0, [], 0);
-  return plans;
+  const fixed: Location[] = [];
+  for (const location of pool) {
+    if (blockMask & LOCATION_BIT[location]) fixed.push(location);
+  }
+  const repeatCost = (plan: Location[]) =>
+    plan.reduce((total, location, index) => {
+      return total + (usedLoc.get(fighters[index])?.has(location) ? 1 : 0);
+    }, 0);
+  return filterPrefixPlans(sortPlansByLeftPack(plans, pool, fixed, repeatCost), pool, fixed);
 }
 
 function searchHorizon(
@@ -538,15 +479,6 @@ function searchHorizon(
       return undefined;
     }
     if (index === order.length) {
-      const mats = locationsForFighterCount(scheduledFighterCount(input)).length;
-      if (mats >= input.requiredHardSessions) {
-        let occupied = 0;
-        for (let block = 1; block <= horizon; block += 1) {
-          if (load[block] > 0) occupied += 1;
-        }
-        // Each fighter can take Main ring only once when locations do not repeat.
-        if (occupied > input.fighters.length) return undefined;
-      }
       return assignLocations(input, prep, chosen, order, blockLocMask, blockPeople, deadline, volunteerCap, () => {
         timedOut = true;
       });
@@ -591,7 +523,6 @@ function assignLocations(
   markTimeout: () => void,
 ): Assignment[] | undefined {
   const pool = locationsForFighterCount(scheduledFighterCount(input));
-  const allowRepeat = pool.length < input.requiredHardSessions;
   const placed = new Map<string, Map<number, Location>>();
   const usedLoc = new Map<string, Set<Location>>();
 
@@ -626,13 +557,23 @@ function assignLocations(
       return undefined;
     }
     if (blockIndex === blocks.length) {
-      if (!everyOccupiedBlockUsesMainRing(placed)) return undefined;
+      if (!placedBlocksArePrefixPacked(placed, pool)) return undefined;
       return assignVolunteers(input, prep, placed, blockPeople, deadline, volunteerCap, markTimeout);
     }
     const block = blocks[blockIndex];
     const fighters = blockFighters.get(block) ?? [];
-    const requireMainRing = (blockLocMask[block] & LOCATION_BIT.MAIN_RING) === 0;
-    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block], allowRepeat, requireMainRing);
+    const refreshUsed = (fighterId: string) => {
+      usedLoc.set(fighterId, new Set(placed.get(fighterId)?.values() ?? []));
+    };
+    const undoApplied = (applied: Array<{ fighterId: string; location: Location }>) => {
+      for (const row of applied) {
+        blockLocMask[block] &= ~LOCATION_BIT[row.location];
+        placed.get(row.fighterId)?.delete(block);
+        refreshUsed(row.fighterId);
+      }
+    };
+    // Location repeats allowed so ~6-block cards can still prefix-pack every block.
+    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block]);
     for (const plan of plans) {
       const applied: Array<{ fighterId: string; location: Location }> = [];
       let ok = true;
@@ -643,29 +584,25 @@ function assignLocations(
           ok = false;
           break;
         }
-        if (!allowRepeat && usedLoc.get(fighterId)?.has(location)) {
-          ok = false;
-          break;
-        }
         blockLocMask[block] |= LOCATION_BIT[location];
         placed.get(fighterId)?.set(block, location);
-        usedLoc.get(fighterId)?.add(location);
+        refreshUsed(fighterId);
         applied.push({ fighterId, location });
       }
       if (!ok) {
-        for (const row of applied) {
-          blockLocMask[block] &= ~LOCATION_BIT[row.location];
-          placed.get(row.fighterId)?.delete(block);
-          usedLoc.get(row.fighterId)?.delete(row.location);
-        }
+        undoApplied(applied);
+        continue;
+      }
+      // Refuse mid-search holes (Block 4: Main+Front / Block 6: Back+Front).
+      const blockLocs = [...placed.values()]
+        .map((mapping) => mapping.get(block))
+        .filter((location): location is Location => location !== undefined);
+      if (!isContiguousLeftPack(blockLocs, pool)) {
+        undoApplied(applied);
         continue;
       }
       const done = walk(blockIndex + 1);
-      for (const row of applied) {
-        blockLocMask[block] &= ~LOCATION_BIT[row.location];
-        placed.get(row.fighterId)?.delete(block);
-        usedLoc.get(row.fighterId)?.delete(row.location);
-      }
+      undoApplied(applied);
       if (done) return done;
       if (Date.now() >= deadline) {
         markTimeout();
@@ -676,6 +613,24 @@ function assignLocations(
   };
 
   return walk(0);
+}
+
+function placedBlocksArePrefixPacked(
+  placed: Map<string, Map<number, Location>>,
+  pool: Location[],
+): boolean {
+  const byBlock = new Map<number, Location[]>();
+  for (const mapping of placed.values()) {
+    for (const [block, location] of mapping) {
+      const list = byBlock.get(block) ?? [];
+      list.push(location);
+      byBlock.set(block, list);
+    }
+  }
+  for (const locations of byBlock.values()) {
+    if (!isContiguousLeftPack(locations, pool)) return false;
+  }
+  return true;
 }
 
 function assignVolunteers(

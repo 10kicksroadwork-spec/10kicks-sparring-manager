@@ -13,6 +13,12 @@ import {
   type ScheduleInput,
   type SessionAthlete,
 } from "@/lib/domain/types";
+import {
+  compactBlockToPrefix,
+  isContiguousLeftPack,
+  leftPackPenalty,
+  sortPlansByLeftPack,
+} from "@/lib/domain/location-packing";
 import { validateSchedule } from "@/lib/domain/validator";
 import { canCoverWithoutVolunteerReuse } from "@/lib/domain/volunteer-load";
 
@@ -104,13 +110,12 @@ describe("Saturday rules", () => {
     });
   });
 
-  it("schedules 5 fighters and 15 volunteers packing Main ring, one block per volunteer", () => {
+  it("schedules 5 fighters in ~6 blocks with prefix packing and one block per volunteer", () => {
     const full = solve(demoInput());
     expect(full.status).toBe("FEASIBLE");
     if (full.status !== "FEASIBLE") return;
-    // Main ring in every occupied block needs ≤5 occupied blocks (one Main ring per fighter),
-    // which first appears at horizon 9 under rest spacing.
-    expect(full.blockCount).toBe(9);
+    // Short card + hard left-pack; location repeats allowed when packing needs them.
+    expect(full.blockCount).toBe(6);
     expect(full.assignments).toHaveLength(15);
     expect(full.optimality).toBe("PROVEN");
     const validation = validateSchedule(demoInput(), full.assignments);
@@ -120,7 +125,6 @@ describe("Saturday rules", () => {
       const mine = full.assignments.filter((a) => a.fighterId === fighterId);
       expect(mine).toHaveLength(3);
       expect(new Set(mine.map((a) => a.volunteerId)).size).toBe(3);
-      expect(new Set(mine.map((a) => a.location))).toEqual(new Set(LOCATIONS));
       const blocks = mine.map((a) => a.blockIndex).sort((a, b) => a - b);
       expect(blocks[1] - blocks[0]).toBeGreaterThanOrEqual(2);
       expect(blocks[2] - blocks[1]).toBeGreaterThanOrEqual(2);
@@ -138,9 +142,14 @@ describe("Saturday rules", () => {
       expect(list.length).toBe(1);
       expect(new Set(list.map((a) => a.fighterId)).size).toBe(list.length);
     }
-    for (const block of new Set(full.assignments.map((a) => a.blockIndex))) {
-      const locs = full.assignments.filter((a) => a.blockIndex === block).map((a) => a.location);
-      expect(locs).toContain("MAIN_RING");
+
+    for (const block of new Set(full.assignments.map((row) => row.blockIndex))) {
+      const locs = full.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+      // No Block-4/6 holes: never Main+Front without Back, never Back+Front without Main.
+      const set = new Set(locs);
+      expect(set.has("MAIN_RING") && set.has("FLOOR_2") && !set.has("FLOOR_1")).toBe(false);
+      expect(set.has("FLOOR_1") && set.has("FLOOR_2") && !set.has("MAIN_RING")).toBe(false);
     }
 
     for (const assignment of full.assignments) {
@@ -156,10 +165,10 @@ describe("Saturday rules", () => {
     }
 
     const blocked = solve(demoInput(), 8000, 1);
-    const tooShort = solve({ ...demoInput(), maxBlockHorizon: 8 });
-    expect(tooShort.status).toBe("UNSAT");
-    if (tooShort.status === "UNSAT") {
-      expect(tooShort.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
+    const five = solve({ ...demoInput(), maxBlockHorizon: 5 });
+    expect(five.status).toBe("UNSAT");
+    if (five.status === "UNSAT") {
+      expect(five.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
     }
     expect(blocked.status).toBe("FEASIBLE");
   });
@@ -201,56 +210,127 @@ describe("Saturday rules", () => {
     }
     expect(Math.max(...byVolunteer.values())).toBeGreaterThan(1);
     expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(2);
-    for (const block of new Set(result.assignments.map((a) => a.blockIndex))) {
-      expect(result.assignments.some((a) => a.blockIndex === block && a.location === "MAIN_RING")).toBe(true);
+    for (const block of new Set(result.assignments.map((row) => row.blockIndex))) {
+      const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
     }
   }, 20_000);
 
-  it("rejects occupied blocks that leave Main ring open on a full card", () => {
+  it("Block-4 shape: Main + Front with Back open is rejected and compacts to Main + Back", () => {
+    // Coach screenshot: Main filled | Back Open | Malachi on Front → Malachi to Back, Front Open.
+    expect(isContiguousLeftPack(["MAIN_RING", "FLOOR_2"], [...LOCATIONS])).toBe(false);
+    expect(leftPackPenalty(["MAIN_RING", "FLOOR_1"], [...LOCATIONS])).toBeLessThan(
+      leftPackPenalty(["MAIN_RING", "FLOOR_2"], [...LOCATIONS]),
+    );
+
     const schedule = input({
-      fighters: [athlete("f1")],
-      volunteers: [athlete("v1"), athlete("v2"), athlete("v3")],
+      fighters: [athlete("mason"), athlete("malachi")],
+      volunteers: [1, 2, 3, 4, 5, 6].map((n) => athlete(`v${n}`)),
     });
-    const card: Assignment[] = [
+    const hole: Assignment[] = [
       {
-        assignmentId: "a1",
+        assignmentId: "b4-main",
         sessionId: "s1",
         generationId: "g",
-        blockIndex: 1,
-        location: "FLOOR_1",
-        fighterId: "f1",
+        blockIndex: 4,
+        location: "MAIN_RING",
+        fighterId: "mason",
         volunteerId: "v1",
         status: "PLANNED",
         locked: false,
       },
       {
-        assignmentId: "a2",
+        assignmentId: "b4-front",
         sessionId: "s1",
         generationId: "g",
-        blockIndex: 3,
-        location: "MAIN_RING",
-        fighterId: "f1",
+        blockIndex: 4,
+        location: "FLOOR_2",
+        fighterId: "malachi",
         volunteerId: "v2",
         status: "PLANNED",
         locked: false,
       },
+    ];
+    expect(validateSchedule(schedule, hole, { mode: "full" }).errors.some((e) => e.code === "LOCATION_PACKING_HOLE")).toBe(
+      true,
+    );
+
+    // Lock Main so only the Front match shifts left onto Back Mat.
+    hole[0] = { ...hole[0], locked: true };
+    const compacted = compactBlockToPrefix(
+      hole,
+      [...LOCATIONS],
+      new Map([
+        ["mason", new Set()],
+        ["malachi", new Set()],
+      ]),
+      false,
+    );
+    expect(compacted).not.toBeNull();
+    expect(new Set(compacted!.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+    expect(compacted!.find((row) => row.fighterId === "mason")?.location).toBe("MAIN_RING");
+    expect(compacted!.find((row) => row.fighterId === "malachi")?.location).toBe("FLOOR_1");
+    expect(isContiguousLeftPack(compacted!.map((row) => row.location), [...LOCATIONS])).toBe(true);
+  });
+
+  it("Block-6 shape: Back + Front with Main open is rejected and compacts to Main + Back", () => {
+    // Coach screenshot: Main Open | Malachi Back | Mason Front → Malachi Main, Mason Back, Front Open.
+    expect(isContiguousLeftPack(["FLOOR_1", "FLOOR_2"], [...LOCATIONS])).toBe(false);
+    const ranked = sortPlansByLeftPack(
+      [
+        ["FLOOR_1", "FLOOR_2"],
+        ["MAIN_RING", "FLOOR_1"],
+        ["MAIN_RING", "FLOOR_2"],
+      ],
+      [...LOCATIONS],
+    );
+    expect(new Set(ranked[0])).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+
+    const schedule = input({
+      fighters: [athlete("malachi"), athlete("mason")],
+      volunteers: [1, 2, 3, 4, 5, 6].map((n) => athlete(`v${n}`)),
+    });
+    const hole: Assignment[] = [
       {
-        assignmentId: "a3",
+        assignmentId: "b6-back",
         sessionId: "s1",
         generationId: "g",
-        blockIndex: 5,
-        location: "MAIN_RING",
-        fighterId: "f1",
-        volunteerId: "v3",
+        blockIndex: 6,
+        location: "FLOOR_1",
+        fighterId: "malachi",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "b6-front",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 6,
+        location: "FLOOR_2",
+        fighterId: "mason",
+        volunteerId: "v2",
         status: "PLANNED",
         locked: false,
       },
     ];
-    const validation = validateSchedule(schedule, card);
-    expect(validation.ok).toBe(false);
-    expect(validation.errors.some((e) => e.code === "MAIN_RING_REQUIRED" && e.blockIndex === 1)).toBe(true);
-    // Partial regenerate checks still allow a locked floor bout so Main ring can be filled later.
-    expect(validateSchedule(schedule, [card[0]], { mode: "partial" }).ok).toBe(true);
+    expect(validateSchedule(schedule, hole, { mode: "full" }).errors.some((e) => e.code === "LOCATION_PACKING_HOLE")).toBe(
+      true,
+    );
+
+    const compacted = compactBlockToPrefix(
+      hole,
+      [...LOCATIONS],
+      new Map([
+        ["malachi", new Set()],
+        ["mason", new Set()],
+      ]),
+      false,
+    );
+    expect(compacted).not.toBeNull();
+    expect(new Set(compacted!.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+    expect(compacted!.some((row) => row.location === "FLOOR_2")).toBe(false);
+    expect(isContiguousLeftPack(compacted!.map((row) => row.location), [...LOCATIONS])).toBe(true);
   });
 
   it("warns when a volunteer is reused even though the pool was large enough", () => {

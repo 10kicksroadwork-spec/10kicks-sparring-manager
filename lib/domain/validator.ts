@@ -1,3 +1,4 @@
+import { isContiguousLeftPack } from "./location-packing";
 import { evaluatePair } from "./matchmaking";
 import {
   LOCATIONS,
@@ -198,13 +199,12 @@ export function validateSchedule(
         people.add(personId);
       }
     }
-    // Full cards must pack Main ring. Partial/fixed-only checks skip this so regenerate
-    // can still add a Main ring match beside a locked floor bout when rest spacing allows.
-    if (mode === "full" && group.length > 0 && !locations.has("MAIN_RING")) {
+    // Full cards must pack left: Main → Back Mat → Front Mat (no open higher-priority slot).
+    if (mode === "full" && group.length > 0 && !isContiguousLeftPack(locations, mats)) {
       errors.push(
         diagnostic(
-          "MAIN_RING_REQUIRED",
-          `Block ${blockIndex} has hard matches but ${locationLabel("MAIN_RING")} is open. Fill Main ring before Back Mat or Front Mat.`,
+          "LOCATION_PACKING_HOLE",
+          `Block ${blockIndex} leaves a higher-priority mat open. Pack matches left: ${mats.map(locationLabel).join(" → ")}.`,
           { blockIndex, details: { locations: [...locations].join(",") } },
         ),
       );
@@ -243,15 +243,8 @@ export function validateSchedule(
         }),
       );
     }
-    const locations = counting.map((a) => a.location);
-    const allowRepeat = mats.length < input.requiredHardSessions;
-    if (!allowRepeat && new Set(locations).size !== locations.length) {
-      errors.push(
-        diagnostic("LOCATION_COVERAGE_CONFLICT", `${fighter.displayName} is scheduled in the same location more than once.`, {
-          fighterId: fighter.athleteId,
-        }),
-      );
-    }
+    // Location variety is soft: packing + short cards may repeat Main / mats.
+    // Still reject mats outside this Saturday's venue pool (e.g. Front Mat under 5).
     for (const assignment of counting) {
       if (!mats.includes(assignment.location) && !fixedIds.has(assignment.assignmentId)) {
         errors.push(
@@ -270,26 +263,14 @@ export function validateSchedule(
         }),
       );
     }
-    if (mode === "full") {
-      if (counting.length !== input.requiredHardSessions) {
-        errors.push(
-          diagnostic(
-            "SESSION_COUNT",
-            `${fighter.displayName} has ${counting.length} hard sessions. A full Saturday rundown needs exactly ${input.requiredHardSessions}.`,
-            { fighterId: fighter.athleteId, details: { count: counting.length, required: input.requiredHardSessions } },
-          ),
-        );
-      }
-      const missing = allowRepeat ? [] : mats.filter((location) => !locations.includes(location));
-      if (counting.length === input.requiredHardSessions && missing.length > 0) {
-        errors.push(
-          diagnostic(
-            "LOCATION_COVERAGE_CONFLICT",
-            `${fighter.displayName} is missing ${missing.map(locationLabel).join(", ")}. Each fighter spars once in the main ring, Back Mat, and Front Mat.`,
-            { fighterId: fighter.athleteId },
-          ),
-        );
-      }
+    if (mode === "full" && counting.length !== input.requiredHardSessions) {
+      errors.push(
+        diagnostic(
+          "SESSION_COUNT",
+          `${fighter.displayName} has ${counting.length} hard sessions. A full Saturday rundown needs exactly ${input.requiredHardSessions}.`,
+          { fighterId: fighter.athleteId, details: { count: counting.length, required: input.requiredHardSessions } },
+        ),
+      );
     }
 
     for (const assignment of counting) {
