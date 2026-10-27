@@ -172,11 +172,25 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
           const rows = view?.assignments.filter((row) => row.blockIndex === block) ?? [];
           const busyIds = new Set(rows.flatMap((row) => [row.fighterId, row.volunteerId]));
           const resting = view?.attendance.filter((person) => person.assignedRole === "FIGHTER" && person.availabilityStatus === "AVAILABLE" && !busyIds.has(person.athleteId)) ?? [];
+          const blockComplete =
+            rows.length > 0 &&
+            rows.some((row) => row.status === "COMPLETED") &&
+            rows.every((row) => row.status === "COMPLETED" || row.status === "INTERRUPTED");
           return (
-            <section key={block} className="card" data-testid={`block-${block}`}>
+            <section
+              key={block}
+              className={blockComplete ? "card card-complete" : "card"}
+              data-testid={`block-${block}`}
+              data-complete={blockComplete ? "true" : "false"}
+              aria-label={blockComplete ? `Block ${block}, Completed` : `Block ${block}`}
+            >
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-display text-3xl">Block {block}</h2>
-                <button className="tap" type="button" disabled={busy} data-testid={`complete-block-${block}`} onClick={() => void act(`/api/sessions/${sessionId}/blocks/${block}/complete`, { confirmBothRounds: true })}>Mark block complete</button>
+                {blockComplete ? (
+                  <span className="block-complete-label" data-testid={`block-complete-label-${block}`}>Completed</span>
+                ) : (
+                  <button className="tap" type="button" disabled={busy} data-testid={`complete-block-${block}`} onClick={() => void act(`/api/sessions/${sessionId}/blocks/${block}/complete`, { confirmBothRounds: true })}>Mark block complete</button>
+                )}
               </div>
               <div className="mt-3 grid gap-2">
                 {columns.map((location) => {
