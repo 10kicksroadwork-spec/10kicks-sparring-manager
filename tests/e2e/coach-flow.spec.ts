@@ -91,6 +91,8 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await lock.click();
   await expect(page.getByTestId(lockId ?? "")).toHaveText("Unlock match");
   await page.getByTestId("complete-block-1").click();
+  await expect(page.getByTestId("block-1")).toHaveAttribute("data-complete", "true");
+  await expect(page.getByTestId("block-complete-label-1")).toHaveText("Completed");
   await expect(page.getByTestId("block-1")).toContainText("Completed · both rounds");
   const completed = await page.getByTestId("block-1").innerText();
   const lockedArticle = page.getByTestId(lockId ?? "").locator("xpath=ancestor::article");
