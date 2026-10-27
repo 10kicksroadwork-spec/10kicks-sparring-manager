@@ -1,4 +1,52 @@
-import { countsAsHardSession, type AssignmentStatus } from "./types";
+import {
+  countsAsHardSession,
+  type Assignment,
+  type AssignmentStatus,
+  type ScheduleInput,
+} from "./types";
+
+/** Hard + interrupted rows count toward the volunteer session cap. */
+export function volunteerSessionLoad(assignments: Assignment[], volunteerId: string): number {
+  return assignments.filter(
+    (row) =>
+      row.volunteerId === volunteerId &&
+      (countsAsHardSession(row.status) || row.status === "INTERRUPTED"),
+  ).length;
+}
+
+/** Open hard sessions still needed after locked/completed work. */
+export function openHardDemand(input: ScheduleInput): number {
+  return input.fighters.reduce((total, fighter) => {
+    const done = input.fixedAssignments.filter(
+      (assignment) => assignment.fighterId === fighter.athleteId && countsAsHardSession(assignment.status),
+    ).length;
+    return total + Math.max(input.requiredHardSessions - done, 0);
+  }, 0);
+}
+
+/**
+ * True when unused volunteers can cover every open hard session with each person
+ * used at most once. If the pool is thinner, reuse up to maxVolunteerSessions is allowed.
+ */
+export function canCoverWithoutVolunteerReuse(input: ScheduleInput): boolean {
+  const unavailable = new Set(input.unavailableIds ?? []);
+  let singleSlots = 0;
+  for (const volunteer of input.volunteers) {
+    if (unavailable.has(volunteer.athleteId)) continue;
+    const used = volunteerSessionLoad(input.fixedAssignments, volunteer.athleteId);
+    if (used > 1) return false;
+    if (used === 0) singleSlots += 1;
+  }
+  return singleSlots >= openHardDemand(input);
+}
+
+/** Headcount check on a finished card: pool large enough that reuse was avoidable. */
+export function reuseWasAvoidable(input: ScheduleInput, assignments: Assignment[]): boolean {
+  const unavailable = new Set(input.unavailableIds ?? []);
+  const pool = input.volunteers.filter((volunteer) => !unavailable.has(volunteer.athleteId)).length;
+  const hardCount = assignments.filter((row) => countsAsHardSession(row.status)).length;
+  return pool >= hardCount;
+}
 
 export type HardAssignmentRef = {
   assignmentId: string;

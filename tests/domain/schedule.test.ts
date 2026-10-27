@@ -7,12 +7,14 @@ import {
   PROPOSED_MATCH_LIMITS,
   countsAsCompletedTwoRoundSession,
   countsAsHardSession,
+  locationLabel,
   type Assignment,
   type NumericOverride,
   type ScheduleInput,
   type SessionAthlete,
 } from "@/lib/domain/types";
 import { validateSchedule } from "@/lib/domain/validator";
+import { canCoverWithoutVolunteerReuse } from "@/lib/domain/volunteer-load";
 
 function athlete(id: string, weight = 160, skill = 3, aggression = 3): SessionAthlete {
   return { athleteId: id, displayName: id, weightLbs: weight, skill, aggression };
@@ -44,7 +46,7 @@ function demoInput(): ScheduleInput {
   });
 }
 
-function solve(schedule: ScheduleInput, ms = 8000, seed = 1) {
+function solve(schedule: ScheduleInput, ms = 15_000, seed = 1) {
   return solveSchedule(schedule, { maxComputeMs: ms, deterministicSeed: seed });
 }
 
@@ -102,11 +104,13 @@ describe("Saturday rules", () => {
     });
   });
 
-  it("schedules 5 fighters and 15 volunteers in 6 blocks and fails when forced to 5", () => {
+  it("schedules 5 fighters and 15 volunteers packing Main ring, one block per volunteer", () => {
     const full = solve(demoInput());
     expect(full.status).toBe("FEASIBLE");
     if (full.status !== "FEASIBLE") return;
-    expect(full.blockCount).toBe(6);
+    // Main ring in every occupied block needs ≤5 occupied blocks (one Main ring per fighter),
+    // which first appears at horizon 9 under rest spacing.
+    expect(full.blockCount).toBe(9);
     expect(full.assignments).toHaveLength(15);
     expect(full.optimality).toBe("PROVEN");
     const validation = validateSchedule(demoInput(), full.assignments);
@@ -122,6 +126,7 @@ describe("Saturday rules", () => {
       expect(blocks[2] - blocks[1]).toBeGreaterThanOrEqual(2);
     }
 
+    expect(canCoverWithoutVolunteerReuse(demoInput())).toBe(true);
     const byVolunteer = new Map<string, Assignment[]>();
     for (const assignment of full.assignments) {
       const list = byVolunteer.get(assignment.volunteerId) ?? [];
@@ -129,8 +134,13 @@ describe("Saturday rules", () => {
       byVolunteer.set(assignment.volunteerId, list);
     }
     for (const list of byVolunteer.values()) {
-      expect(list.length).toBeLessThanOrEqual(2);
+      // 15 volunteers cover 15 hard sessions — solver must not reuse anyone.
+      expect(list.length).toBe(1);
       expect(new Set(list.map((a) => a.fighterId)).size).toBe(list.length);
+    }
+    for (const block of new Set(full.assignments.map((a) => a.blockIndex))) {
+      const locs = full.assignments.filter((a) => a.blockIndex === block).map((a) => a.location);
+      expect(locs).toContain("MAIN_RING");
     }
 
     for (const assignment of full.assignments) {
@@ -146,10 +156,10 @@ describe("Saturday rules", () => {
     }
 
     const blocked = solve(demoInput(), 8000, 1);
-    const five = solve({ ...demoInput(), maxBlockHorizon: 5 });
-    expect(five.status).toBe("UNSAT");
-    if (five.status === "UNSAT") {
-      expect(five.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
+    const tooShort = solve({ ...demoInput(), maxBlockHorizon: 8 });
+    expect(tooShort.status).toBe("UNSAT");
+    if (tooShort.status === "UNSAT") {
+      expect(tooShort.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
     }
     expect(blocked.status).toBe("FEASIBLE");
   });
@@ -165,10 +175,169 @@ describe("Saturday rules", () => {
     expect(new Set(result.assignments.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
     expect(result.assignments.some((row) => row.location === "FLOOR_2")).toBe(false);
     const byBlock = new Map<number, number>();
-    for (const row of result.assignments) byBlock.set(row.blockIndex, (byBlock.get(row.blockIndex) ?? 0) + 1);
-    for (const count of byBlock.values()) expect(count).toBeLessThanOrEqual(2);
+    for (const row of result.assignments) {
+      byBlock.set(row.blockIndex, (byBlock.get(row.blockIndex) ?? 0) + 1);
+    }
+    for (const [block, count] of byBlock) {
+      expect(count).toBeLessThanOrEqual(2);
+      const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(locs).toContain("MAIN_RING");
+    }
     expect(validateSchedule(schedule, result.assignments).ok).toBe(true);
   }, 20_000);
+
+  it("allows volunteer reuse up to 2 when the pool is too thin for single-block use", () => {
+    const schedule = input({
+      fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+      volunteers: Array.from({ length: 10 }, (_, i) => athlete(`v${i + 1}`)),
+    });
+    expect(canCoverWithoutVolunteerReuse(schedule)).toBe(false);
+    const result = solve(schedule, 12_000);
+    expect(result.status).toBe("FEASIBLE");
+    if (result.status !== "FEASIBLE") return;
+    const byVolunteer = new Map<string, number>();
+    for (const row of result.assignments) {
+      byVolunteer.set(row.volunteerId, (byVolunteer.get(row.volunteerId) ?? 0) + 1);
+    }
+    expect(Math.max(...byVolunteer.values())).toBeGreaterThan(1);
+    expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(2);
+    for (const block of new Set(result.assignments.map((a) => a.blockIndex))) {
+      expect(result.assignments.some((a) => a.blockIndex === block && a.location === "MAIN_RING")).toBe(true);
+    }
+  }, 20_000);
+
+  it("rejects occupied blocks that leave Main ring open on a full card", () => {
+    const schedule = input({
+      fighters: [athlete("f1")],
+      volunteers: [athlete("v1"), athlete("v2"), athlete("v3")],
+    });
+    const card: Assignment[] = [
+      {
+        assignmentId: "a1",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 1,
+        location: "FLOOR_1",
+        fighterId: "f1",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a2",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 3,
+        location: "MAIN_RING",
+        fighterId: "f1",
+        volunteerId: "v2",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a3",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 5,
+        location: "MAIN_RING",
+        fighterId: "f1",
+        volunteerId: "v3",
+        status: "PLANNED",
+        locked: false,
+      },
+    ];
+    const validation = validateSchedule(schedule, card);
+    expect(validation.ok).toBe(false);
+    expect(validation.errors.some((e) => e.code === "MAIN_RING_REQUIRED" && e.blockIndex === 1)).toBe(true);
+    // Partial regenerate checks still allow a locked floor bout so Main ring can be filled later.
+    expect(validateSchedule(schedule, [card[0]], { mode: "partial" }).ok).toBe(true);
+  });
+
+  it("warns when a volunteer is reused even though the pool was large enough", () => {
+    const schedule = input({
+      fighters: [athlete("f1"), athlete("f2")],
+      volunteers: [1, 2, 3, 4, 5, 6].map((n) => athlete(`v${n}`)),
+    });
+    const reused: Assignment[] = [
+      {
+        assignmentId: "a1",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 1,
+        location: "MAIN_RING",
+        fighterId: "f1",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a2",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 1,
+        location: "FLOOR_1",
+        fighterId: "f2",
+        volunteerId: "v2",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a3",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 3,
+        location: "FLOOR_1",
+        fighterId: "f1",
+        volunteerId: "v3",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a4",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 3,
+        location: "MAIN_RING",
+        fighterId: "f2",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a5",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 5,
+        location: "MAIN_RING",
+        fighterId: "f1",
+        volunteerId: "v4",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a6",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 5,
+        location: "FLOOR_1",
+        fighterId: "f2",
+        volunteerId: "v5",
+        status: "PLANNED",
+        locked: false,
+      },
+    ];
+    const validation = validateSchedule(schedule, reused);
+    expect(validation.ok).toBe(true);
+    expect(validation.warnings.some((w) => w.code === "VOLUNTEER_REUSE_WHEN_AVOIDABLE" && w.volunteerId === "v1")).toBe(
+      true,
+    );
+  });
+
+  it("labels FLOOR_1/FLOOR_2 as Back Mat and Front Mat for coaches", () => {
+    expect(locationLabel("MAIN_RING")).toBe("Main ring");
+    expect(locationLabel("FLOOR_1")).toBe("Back Mat");
+    expect(locationLabel("FLOOR_2")).toBe("Front Mat");
+  });
 
   it("does not count an interruption as a completed two-round session", () => {
     expect(HARD_ROUNDS_PER_ASSIGNMENT).toBe(2);
@@ -355,8 +524,8 @@ describe("Saturday rules", () => {
       assignmentId: "locked-2",
       sessionId: "s1",
       generationId: "g-old",
-      blockIndex: 2,
-      location: "FLOOR_1",
+      blockIndex: 3,
+      location: "MAIN_RING",
       fighterId: "f2",
       volunteerId: "v2",
       status: "PLANNED",

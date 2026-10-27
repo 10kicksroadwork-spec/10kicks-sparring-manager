@@ -1,11 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
+  canCoverWithoutVolunteerReuse,
   formatBlockList,
   otherHardBlocksForVolunteer,
   swapMultiBlockToastMessage,
   volunteersInMultipleHardBlocks,
 } from "@/lib/domain/volunteer-load";
-import type { AssignmentStatus } from "@/lib/domain/types";
+import { PROPOSED_MATCH_LIMITS, type AssignmentStatus, type ScheduleInput, type SessionAthlete } from "@/lib/domain/types";
+
+function athlete(id: string): SessionAthlete {
+  return { athleteId: id, displayName: id, weightLbs: 160, skill: 3, aggression: null };
+}
+
+function scheduleInput(overrides: Partial<ScheduleInput> = {}): ScheduleInput {
+  return {
+    sessionId: "s1",
+    generationId: "g",
+    fighters: [],
+    volunteers: [],
+    limits: { ...PROPOSED_MATCH_LIMITS },
+    restrictions: [],
+    overrides: [],
+    fixedAssignments: [],
+    requiredHardSessions: 3,
+    maxVolunteerSessions: 2,
+    restGapBlocks: 1,
+    scoringWeights: { weight: 0.4, skill: 0.6, aggression: 0 },
+    maxBlockHorizon: 12,
+    ...overrides,
+  };
+}
 
 function row(
   assignmentId: string,
@@ -61,5 +85,24 @@ describe("volunteer-load helpers", () => {
     expect(swapMultiBlockToastMessage("Alex", [])).toBeNull();
     expect(swapMultiBlockToastMessage("Alex", [6])).toBe("Alex is also slated for Block 6.");
     expect(swapMultiBlockToastMessage("Alex", [2, 6])).toBe("Alex is also slated for Blocks 2 and 6.");
+  });
+
+  it("detects when the volunteer pool can cover without reuse", () => {
+    expect(
+      canCoverWithoutVolunteerReuse(
+        scheduleInput({
+          fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+          volunteers: Array.from({ length: 15 }, (_, i) => athlete(`v${i + 1}`)),
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canCoverWithoutVolunteerReuse(
+        scheduleInput({
+          fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+          volunteers: Array.from({ length: 10 }, (_, i) => athlete(`v${i + 1}`)),
+        }),
+      ),
+    ).toBe(false);
   });
 });
