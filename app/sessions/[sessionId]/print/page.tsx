@@ -59,7 +59,7 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
                 const match = view?.assignments.find((row) => row.blockIndex === block && row.location === location);
                 return (
                   <td key={location} className="border-b border-neutral-300 py-2">
-                    {match ? `${names.get(match.fighterId) ?? "Unknown"} / ${names.get(match.volunteerId) ?? "Unknown"} · 2 rounds${match.status === "INTERRUPTED" ? " · interrupted" : ""}` : "Open"}
+                    {match ? `${names.get(match.fighterId) ?? "Unknown"} / ${names.get(match.volunteerId) ?? "Unknown"}${match.status === "INTERRUPTED" ? " · interrupted" : ""}` : "Open"}
                   </td>
                 );
               })}
