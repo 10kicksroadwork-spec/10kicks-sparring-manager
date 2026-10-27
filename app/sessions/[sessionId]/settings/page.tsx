@@ -77,7 +77,7 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
                 value={settings.limits.maxWeightDifferencePctOfLighterAthlete}
                 onChange={(event) => setSettings({ ...settings, limits: { ...settings.limits, maxWeightDifferencePctOfLighterAthlete: Number(event.target.value) } })} />
             </label>
-            <p className="text-sm text-[var(--muted)]">Both weight limits must pass. For example, 15 lb and 10% means a 120 lb person may be paired with someone at most 12 lb heavier.</p>
+            <p className="text-sm text-[var(--muted)]">Both weight limits must pass. For example, 60 lb and 50% means a 120 lb person may be paired with someone at most 60 lb heavier.</p>
             <label>Maximum skill difference
               <input className="field mt-1" type="number" min={0} max={6} step={1} required aria-label="Max skill gap"
                 value={settings.limits.maxSkillDifference}
@@ -87,7 +87,7 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
           <fieldset className="card grid gap-3">
             <legend className="font-display text-2xl">Round timing</legend>
             <label>Round duration (minutes)
-              <input className="field mt-1" type="number" min={1} max={15} step={1} required aria-label="Round duration minutes"
+              <input className="field mt-1" type="number" min={1} max={15} step={0.5} required aria-label="Round duration minutes"
                 value={settings.timing.roundMinutes}
                 onChange={(event) => setSettings({ ...settings, timing: { ...settings.timing, roundMinutes: Number(event.target.value) } })} />
             </label>

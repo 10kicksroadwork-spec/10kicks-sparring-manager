@@ -95,9 +95,9 @@ describe("Saturday rules", () => {
 
   it("uses the configured weight and skill thresholds", () => {
     expect(PROPOSED_MATCH_LIMITS).toMatchObject({
-      maxWeightDifferenceLbs: 15,
-      maxWeightDifferencePctOfLighterAthlete: 10,
-      maxSkillDifference: 1,
+      maxWeightDifferenceLbs: 60,
+      maxWeightDifferencePctOfLighterAthlete: 50,
+      maxSkillDifference: 3,
       maxAggressionDifference: 1,
     });
   });
@@ -179,13 +179,19 @@ describe("Saturday rules", () => {
   });
 
   it("enforces absolute weight and percent together", () => {
+    // Fixture limits stay tight so AND-of-both-weight-rules stays observable; session defaults are looser.
+    const limits = {
+      maxWeightDifferenceLbs: 15,
+      maxWeightDifferencePctOfLighterAthlete: 10,
+      maxSkillDifference: 1,
+      maxAggressionDifference: 1,
+    };
     const fighter = athlete("f1", 100);
     const heavyPercent = athlete("v1", 114);
     const withinBoth = athlete("v2", 200);
     const fighterHeavy = athlete("f2", 200);
     const absoluteMiss = athlete("v3", 166);
     const fighterMid = athlete("f3", 150);
-    const limits = { ...PROPOSED_MATCH_LIMITS };
     const base = { sessionId: "s1", limits, restrictions: [], overrides: [] };
 
     expect(evaluatePair({ ...base, fighter, volunteer: heavyPercent }).eligible).toBe(false);
@@ -196,7 +202,12 @@ describe("Saturday rules", () => {
   });
 
   it("enforces skill and ignores aggression", () => {
-    const base = { sessionId: "s1", limits: { ...PROPOSED_MATCH_LIMITS }, restrictions: [], overrides: [] };
+    const base = {
+      sessionId: "s1",
+      limits: { ...PROPOSED_MATCH_LIMITS, maxSkillDifference: 1 },
+      restrictions: [],
+      overrides: [],
+    };
     const skill = evaluatePair({
       ...base,
       fighter: athlete("f1", 160, 1, 3),
@@ -234,7 +245,12 @@ describe("Saturday rules", () => {
       sessionId: "s1",
       fighter: athlete("f1", 150),
       volunteer: athlete("v1", 190),
-      limits: { ...PROPOSED_MATCH_LIMITS },
+      limits: {
+        maxWeightDifferenceLbs: 15,
+        maxWeightDifferencePctOfLighterAthlete: 10,
+        maxSkillDifference: 1,
+        maxAggressionDifference: 1,
+      },
       restrictions: [],
     };
     expect(evaluatePair({ ...args, overrides: [override({ reason: "  " })] }).eligible).toBe(false);
@@ -294,6 +310,7 @@ describe("Saturday rules", () => {
   });
 
   it("reports a fighter who has only two eligible volunteers", () => {
+    // 220 vs 150 is 70 lb (fails the 60 lb default) even though 46.7% is under the 50% default.
     const result = solve(
       input({
         fighters: [athlete("f1", 150)],
@@ -303,6 +320,22 @@ describe("Saturday rules", () => {
     expect(result.status).toBe("UNSAT");
     if (result.status === "UNSAT") {
       expect(result.diagnostics.some((d) => d.code === "INSUFFICIENT_ELIGIBLE_PARTNERS" && d.fighterId === "f1")).toBe(true);
+    }
+  });
+
+  it("still surfaces zero-eligible diagnostics at the loose default limits", () => {
+    const result = solve(
+      input({
+        fighters: [athlete("f1", 120, 1)],
+        volunteers: [athlete("v1", 300, 7), athlete("v2", 310, 7)],
+      }),
+    );
+    expect(result.status).toBe("UNSAT");
+    if (result.status === "UNSAT") {
+      const zero = result.diagnostics.find((d) => d.code === "INSUFFICIENT_ELIGIBLE_PARTNERS" && d.fighterId === "f1");
+      expect(zero).toBeTruthy();
+      expect(zero?.details).toMatchObject({ eligible: 0, needed: 3 });
+      expect(zero?.message).toMatch(/0 eligible/);
     }
   });
 

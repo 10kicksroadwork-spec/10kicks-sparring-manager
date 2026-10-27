@@ -46,9 +46,9 @@ export type SessionAthlete = {
  * maxAggressionDifference remains so older session settings still load. It is not applied.
  */
 export const PROPOSED_MATCH_LIMITS = {
-  maxWeightDifferenceLbs: 15,
-  maxWeightDifferencePctOfLighterAthlete: 10,
-  maxSkillDifference: 1,
+  maxWeightDifferenceLbs: 60,
+  maxWeightDifferencePctOfLighterAthlete: 50,
+  maxSkillDifference: 3,
   maxAggressionDifference: 1,
 } as const;
 
