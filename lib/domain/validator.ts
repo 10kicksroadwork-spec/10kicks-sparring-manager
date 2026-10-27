@@ -1,3 +1,4 @@
+import { isContiguousLeftPack } from "./location-packing";
 import { evaluatePair } from "./matchmaking";
 import {
   LOCATIONS,
@@ -197,6 +198,16 @@ export function validateSchedule(
         }
         people.add(personId);
       }
+    }
+    // Full cards must pack left: Main → Back Mat → Front Mat (no open higher-priority slot).
+    if (mode === "full" && group.length > 0 && !isContiguousLeftPack(locations, mats)) {
+      errors.push(
+        diagnostic(
+          "LOCATION_PACKING_HOLE",
+          `Block ${blockIndex} leaves a higher-priority mat open. Pack matches left: ${mats.map(locationLabel).join(" → ")}.`,
+          { blockIndex, details: { locations: [...locations].join(",") } },
+        ),
+      );
     }
   }
 

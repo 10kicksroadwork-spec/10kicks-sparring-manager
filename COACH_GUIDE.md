@@ -17,7 +17,7 @@ If a complete card is impossible, the screen says why and what you can do next, 
 
 ## Run the card
 
-With 5 or more fighters, each block can use Main ring, Back Mat, and Front Mat. With fewer than 5 fighters, only Main ring and Back Mat are used. Within a block, matches pack toward Main ring first, then Back Mat, then Front Mat (prefer leaving Front Mat open rather than Main). Fighters who are not listed in that block are on light/recovery and do not have an assigned partner.
+With 5 or more fighters, each block can use Main ring, Back Mat, and Front Mat. With fewer than 5 fighters, only Main ring and Back Mat are used. Every block packs left with no holes: fill Main ring, then Back Mat, then Front Mat — never leave a higher-priority mat open while a lower one has a match. Fighters who are not listed in that block are on light/recovery and do not have an assigned partner.
 
 - **Discard rundown** is available before anyone starts. It clears the card and returns to check-in so a late arrival can be added. Completed and locked matches are kept, and that button is not offered once sparring has started.
 - **Lock match** keeps that pairing when you rebuild the rest.

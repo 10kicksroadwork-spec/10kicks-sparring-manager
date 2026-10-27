@@ -31,6 +31,9 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
     ) {
       steps.add("Unlock or resolve the completed match that conflicts, then generate again. Completed work stays put.");
     }
+    if (code === "LOCATION_PACKING_HOLE") {
+      steps.add("Shift matches left in that block: fill Main ring, then Back Mat, then Front Mat. Do not leave a higher-priority mat open.");
+    }
     if (code === "VOLUNTEER_REUSE_WHEN_AVOIDABLE") {
       steps.add("Enough volunteers were available for one block each. Prefer single-block use unless you intentionally swapped someone into a second block.");
     }
