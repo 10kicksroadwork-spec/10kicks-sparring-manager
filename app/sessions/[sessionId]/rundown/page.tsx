@@ -7,6 +7,12 @@ import { api, locationLabel, newRequestId } from "@/components/common/client";
 import { rundownStarted } from "@/lib/domain/rundown";
 import { estimateDuration, formatDuration, type RoundTiming } from "@/lib/domain/timing";
 import { locationsForFighterCount, type Location } from "@/lib/domain/types";
+import {
+  formatBlockList,
+  otherHardBlocksForVolunteer,
+  swapMultiBlockToastMessage,
+  volunteersInMultipleHardBlocks,
+} from "@/lib/domain/volunteer-load";
 
 type Assignment = {
   assignmentId: string;
@@ -35,6 +41,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [toast, setToast] = useState("");
   const [busy, setBusy] = useState(false);
   const [swapChoice, setSwapChoice] = useState<Record<string, string>>({});
 
@@ -71,6 +78,12 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     };
   }, [sessionId]);
 
+  useEffect(() => {
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(""), 5000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
+
   const names = new Map(view?.attendance.map((row) => [row.athleteId, row.displayName]) ?? []);
   const name = (id: string) => names.get(id) ?? "Unknown";
   const revision = view?.session.revision ?? 0;
@@ -81,6 +94,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const usedLocations = new Set(view?.assignments.map((row) => row.location) ?? []);
   const columns = ALL_LOCATIONS.filter((location) => locationsForFighterCount(fighterCount).includes(location) || usedLocations.has(location));
   const canDiscard = Boolean(view?.session.activeGenerationId) && !rundownStarted(view?.session.status ?? "", view?.assignments ?? []);
+  const multiBlockVolunteers = volunteersInMultipleHardBlocks(view?.assignments ?? [], names);
 
   async function act(path: string, body: Record<string, unknown>, method = "POST") {
     setBusy(true);
@@ -98,9 +112,12 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
       setError("Pick a different eligible volunteer for this match.");
       return;
     }
+    const volunteerName = name(volunteerId);
+    const otherBlocks = otherHardBlocksForVolunteer(view?.assignments ?? [], volunteerId, match.assignmentId);
     setBusy(true);
     setError("");
     setNotice("");
+    setToast("");
     const result = await api(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, {
       method: "PATCH",
       body: JSON.stringify({
@@ -112,7 +129,11 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     });
     setBusy(false);
     if (!result.ok) setError(result.error.message);
-    else setNotice(`Partner updated for ${name(match.fighterId)}.`);
+    else {
+      setNotice(`Partner updated for ${name(match.fighterId)}.`);
+      const multiBlockToast = swapMultiBlockToastMessage(volunteerName, otherBlocks);
+      if (multiBlockToast) setToast(multiBlockToast);
+    }
     await reload();
   }
 
@@ -159,6 +180,11 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
       </div>
       {error ? <p className="banner mt-3" role="alert">{error}</p> : null}
       {notice ? <p className="banner mt-3" role="status">{notice}</p> : null}
+      {toast ? (
+        <p className="toast" role="status" data-testid="swap-multi-block-toast">
+          {toast}
+        </p>
+      ) : null}
       {view?.corrupt.length ? <p className="banner mt-3" role="alert">{view.corrupt[0]}</p> : null}
       {!view?.session.activeGenerationId ? <p className="mt-4">No rundown yet. <a className="underline" href={`/sessions/${sessionId}/attendance`}>Check in and generate.</a></p> : null}
       {duration ? (
@@ -166,6 +192,22 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
           <strong>Estimated time: {formatDuration(duration.totalSeconds)}</strong>
           <span className="block text-sm text-[var(--muted)]">{duration.blockCount} blocks · {duration.roundCount} rounds · {view?.session.settings.timing.roundMinutes} min rounds · {view?.session.settings.timing.restSeconds} sec rest</span>
         </p>
+      ) : null}
+      {multiBlockVolunteers.length > 0 ? (
+        <section className="card card-warn mt-4" data-testid="multi-volunteer-warning" aria-label="Volunteers in multiple blocks">
+          <h2 className="font-display text-2xl text-[var(--gold)]">Volunteers in more than one block</h2>
+          <p className="mt-1 text-sm text-[var(--muted)]">
+            Fair warning when the pool is thin — these partners already appear in multiple hard assignments on this rundown.
+          </p>
+          <ul className="mt-3 grid gap-2">
+            {multiBlockVolunteers.map((row) => (
+              <li key={row.volunteerId} data-testid={`multi-volunteer-${row.volunteerId}`}>
+                <strong>{row.displayName}</strong>
+                <span className="mt-0.5 block text-sm text-[var(--muted)]">{formatBlockList(row.blocks)}</span>
+              </li>
+            ))}
+          </ul>
+        </section>
       ) : null}
       <div className="mt-4 grid gap-4">
         {blocks.map((block) => {
