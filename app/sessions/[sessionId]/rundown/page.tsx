@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
 import { api, locationLabel, newRequestId } from "@/components/common/client";
 import { rundownStarted } from "@/lib/domain/rundown";
+import { estimateDuration, formatDuration, type RoundTiming } from "@/lib/domain/timing";
 import { locationsForFighterCount, type Location } from "@/lib/domain/types";
 
 type Assignment = {
@@ -18,7 +19,7 @@ type Assignment = {
 };
 type Person = { athleteId: string; displayName: string; assignedRole: "FIGHTER" | "VOLUNTEER"; availabilityStatus: string };
 type View = {
-  session: { revision: number; status: string; updatedAt: string; activeGenerationId: string };
+  session: { revision: number; status: string; updatedAt: string; activeGenerationId: string; settings: { timing: RoundTiming; hardRoundsPerSession: number } };
   attendance: Person[];
   assignments: Assignment[];
   corrupt: string[];
@@ -56,6 +57,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const revision = view?.session.revision ?? 0;
   const blocks = [...new Set(view?.assignments.map((row) => row.blockIndex) ?? [])].sort((a, b) => a - b);
   const maxBlock = blocks.at(-1) ?? 0;
+  const duration = view && maxBlock > 0 ? estimateDuration(maxBlock, view.session.settings.hardRoundsPerSession, view.session.settings.timing) : null;
   const fighterCount = (view?.attendance ?? []).filter((person) => person.assignedRole === "FIGHTER" && person.availabilityStatus === "AVAILABLE").length;
   const usedLocations = new Set(view?.assignments.map((row) => row.location) ?? []);
   const columns = ALL_LOCATIONS.filter((location) => locationsForFighterCount(fighterCount).includes(location) || usedLocations.has(location));
@@ -116,6 +118,12 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
       {notice ? <p className="banner mt-3" role="status">{notice}</p> : null}
       {view?.corrupt.length ? <p className="banner mt-3" role="alert">{view.corrupt[0]}</p> : null}
       {!view?.session.activeGenerationId ? <p className="mt-4">No rundown yet. <a className="underline" href={`/sessions/${sessionId}/attendance`}>Check in and generate.</a></p> : null}
+      {duration ? (
+        <p className="mt-4 text-base" data-testid="session-duration">
+          <strong>Estimated time: {formatDuration(duration.totalSeconds)}</strong>
+          <span className="block text-sm text-[var(--muted)]">{duration.blockCount} blocks · {duration.roundCount} rounds · {view?.session.settings.timing.roundMinutes} min rounds · {view?.session.settings.timing.restSeconds} sec rest</span>
+        </p>
+      ) : null}
       <div className="mt-4 grid gap-4">
         {blocks.map((block) => {
           const rows = view?.assignments.filter((row) => row.blockIndex === block) ?? [];

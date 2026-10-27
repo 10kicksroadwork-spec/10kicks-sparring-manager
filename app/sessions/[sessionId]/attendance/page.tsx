@@ -11,7 +11,7 @@ import { rundownStarted } from "@/lib/domain/rundown";
 type Athlete = { athleteId: string; displayName: string; weightLbs: number | null; skill: number | null; aggression: number | null; roleEligibility: string; active: boolean };
 type Attendance = { athleteId: string; displayName: string; assignedRole: "FIGHTER" | "VOLUNTEER"; present: boolean; availabilityStatus: string; weightLbsSnapshot: number; skillSnapshot: number; aggressionSnapshot: number | null };
 type SessionPayload = {
-  session: { sessionId: string; revision: number; status: string; activeGenerationId: string; settings: { limitsNotice: string } };
+  session: { sessionId: string; revision: number; status: string; activeGenerationId: string };
   attendance: Attendance[];
   assignments: { status: string; locked: boolean }[];
   corrupt: string[];
@@ -239,7 +239,6 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
       <p className="mt-2 text-[var(--muted)]">{fighters.length} fighters · {volunteers.length} volunteers · revision {revision || "…"}{pending > 0 ? " · saving" : ""}</p>
       <p className="mt-2 text-sm text-[var(--muted)]">Camp fighters start checked in. Uncheck anyone who is absent. Everyone else with weight and skill is on the volunteer list. One role this Saturday.</p>
       <input className="field mt-3" aria-label="Find a person" placeholder="Find a person" value={query} onChange={(event) => setQuery(event.target.value)} />
-      {view?.session.settings.limitsNotice ? <p className="mt-3 text-sm text-[var(--muted)]">{view.session.settings.limitsNotice}</p> : null}
       {canDiscard ? (
         <div className="card mt-3 grid gap-2">
           <p>A rundown is ready and sparring has not started. Discard it to change who is here, then generate again.</p>

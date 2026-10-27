@@ -91,16 +91,21 @@ export default function AthletesPage() {
       </label>
       {error ? <p className="banner mt-3" role="alert">{error}</p> : null}
       {notice ? <p className="banner mt-3" role="status">{notice}</p> : null}
-      <ul className="mt-4 grid gap-2">
+      <p className="mt-3 text-sm text-[var(--muted)]">{shown.length} {shown.length === 1 ? "person" : "people"} · Select a name to see details.</p>
+      <ul className="mt-2 grid gap-2">
         {shown.map((athlete) => (
-          <li key={athlete.athleteId} className="card">
-            <div className="flex items-baseline justify-between gap-3">
-              <h2 className="text-xl font-semibold">{athlete.displayName}</h2>
-              <span className="text-sm text-[var(--muted)]">{athlete.active ? athlete.roleEligibility : "Inactive"}</span>
-            </div>
-            <p className="mt-1 text-[var(--muted)]">{ratingLine(athlete)}</p>
-            {isReadyForHardMatch(athlete) ? null : <p className="mt-1 text-sm">Not ready for hard sparring until weight and skill are filled in.</p>}
-            {athlete.coachNotes ? <p className="mt-1 text-sm">{athlete.coachNotes}</p> : null}
+          <li key={athlete.athleteId}>
+            <details className="card roster-entry">
+              <summary className="flex min-h-6 cursor-pointer list-none items-center justify-between gap-3 font-semibold marker:hidden">
+                <span>{athlete.displayName}</span>
+                <span className="roster-chevron text-[var(--gold)]" aria-hidden="true">⌄</span>
+              </summary>
+              <div className="mt-3 border-t border-[var(--line)] pt-3">
+                <p className="text-[var(--muted)]">{ratingLine(athlete)}</p>
+                {isReadyForHardMatch(athlete) ? null : <p className="mt-2 text-sm">Weight and skill are needed before checking this person into hard sparring.</p>}
+                {athlete.coachNotes ? <p className="mt-2 text-sm">{athlete.coachNotes}</p> : null}
+              </div>
+            </details>
           </li>
         ))}
       </ul>

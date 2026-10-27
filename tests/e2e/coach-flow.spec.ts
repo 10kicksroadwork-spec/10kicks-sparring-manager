@@ -24,7 +24,6 @@ test("sign-in fits phone and desktop widths", async ({ page }) => {
     await expect(button).toBeVisible();
     const box = await button.boundingBox();
     expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
-    await expect(page.getByText(/not a safety certification/i)).toBeVisible();
     await noHorizontalOverflow(page);
   }
 });
@@ -82,6 +81,7 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await expect(page.getByText("Demo Walk-In is checked in.")).toBeVisible();
   await page.getByTestId("generate-rundown").click();
   await expect(page.getByTestId("block-6")).toBeVisible();
+  await expect(page.getByTestId("session-duration")).toContainText("47 min");
   await expect(page.getByTestId("block-1")).toBeVisible();
 
   const removable = (await page.getByTestId("block-2").locator('[data-testid^="match-"]').first().innerText()).split(" / ")[1]?.trim();
@@ -104,8 +104,18 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await expect(page.getByText("saving")).toHaveCount(0);
 
   await page.getByRole("link", { name: "Session limits" }).click();
-  await expect(page.getByText(/pending coach safety review/i)).toBeVisible();
+  await expect(page.getByLabel("Round duration minutes")).toHaveValue("3");
+  await expect(page.getByLabel("Rest between rounds seconds")).toHaveValue("60");
+  await expect(page.getByText(/not safety-certified/i)).toHaveCount(0);
+  await page.getByLabel("Round duration minutes").fill("2");
+  await page.getByLabel("Rest between rounds seconds").fill("30");
+  await page.getByRole("button", { name: "Save session settings" }).click();
+  await expect(page.getByRole("status")).toHaveText("Session settings saved.");
+  await page.reload();
+  await expect(page.getByLabel("Round duration minutes")).toHaveValue("2");
+  await expect(page.getByLabel("Rest between rounds seconds")).toHaveValue("30");
   await page.goto(attendanceUrl.replace("/attendance", "/rundown"));
+  await expect(page.getByTestId("session-duration")).toContainText("29 min 30 sec");
   await page.getByTestId("regenerate").click();
   await expect(page.getByText("Remaining matches rebuilt. Completed and locked matches stayed.")).toBeVisible();
   expect(await page.getByTestId("block-1").innerText()).toBe(completed);
@@ -114,5 +124,6 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await page.getByRole("link", { name: "Print" }).click();
   await expect(page.getByTestId("print-rundown")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Hard sparring rundown" })).toBeVisible();
+  await expect(page.getByTestId("print-duration")).toContainText("29 min 30 sec");
   await noHorizontalOverflow(page);
 });

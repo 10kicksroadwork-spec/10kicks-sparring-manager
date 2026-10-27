@@ -52,9 +52,6 @@ export const PROPOSED_MATCH_LIMITS = {
   maxAggressionDifference: 1,
 } as const;
 
-export const PROPOSED_LIMITS_NOTICE =
-  "Proposed defaults pending coach safety review: 15 lb AND 10% of the lighter athlete, and skill gap 1. These limits are not safety-certified. The coach decides suitability, injury readiness, conduct, and intensity.";
-
 export type MatchingLimits = {
   maxWeightDifferenceLbs: number;
   maxWeightDifferencePctOfLighterAthlete: number;
@@ -192,9 +189,9 @@ export function saturdayPresetSettings(limits: MatchingLimits = PROPOSED_MATCH_L
   return {
     algorithmVersion: "1.0.0",
     preset: "SATURDAY_THREE_HARD",
-    limitsPendingCoachReview: true,
-    limitsNotice: PROPOSED_LIMITS_NOTICE,
     limits: { ...limits },
+    // Each block has two sequential rounds; separate sparring areas run in parallel.
+    timing: { roundMinutes: 3, restSeconds: 60 },
     requiredHardSessionsPerFighter: 3,
     hardRoundsPerSession: HARD_ROUNDS_PER_ASSIGNMENT,
     maxVolunteerHardSessions: 2,

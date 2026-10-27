@@ -66,7 +66,6 @@ export default function DashboardPage() {
         <button className="tap h-14 text-lg" type="button" onClick={() => void startSaturday()} disabled={busy} data-testid="start-saturday">
           {busy ? "Starting…" : "Start Saturday session"}
         </button>
-        <a className="tap h-12" href="/athletes">Athlete roster</a>
       </div>
       <section className="mt-8">
         <h2 className="font-display text-3xl">Previous sessions</h2>

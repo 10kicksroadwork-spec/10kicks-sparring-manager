@@ -4,7 +4,6 @@ import { solveSchedule } from "@/lib/domain/solver";
 import {
   HARD_ROUNDS_PER_ASSIGNMENT,
   LOCATIONS,
-  PROPOSED_LIMITS_NOTICE,
   PROPOSED_MATCH_LIMITS,
   countsAsCompletedTwoRoundSession,
   countsAsHardSession,
@@ -94,9 +93,7 @@ describe("Saturday rules", () => {
     expect(skill.errors.some((error) => error.code === "INCOMPLETE_PROFILE" && error.message.includes("1 to 7"))).toBe(true);
   });
 
-  it("labels the numeric thresholds as pending coach review", () => {
-    expect(PROPOSED_LIMITS_NOTICE.toLowerCase()).toContain("pending coach");
-    expect(PROPOSED_LIMITS_NOTICE.toLowerCase()).toContain("not safety-certified");
+  it("uses the configured weight and skill thresholds", () => {
     expect(PROPOSED_MATCH_LIMITS).toMatchObject({
       maxWeightDifferenceLbs: 15,
       maxWeightDifferencePctOfLighterAthlete: 10,

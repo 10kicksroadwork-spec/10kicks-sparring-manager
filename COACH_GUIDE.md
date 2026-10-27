@@ -10,7 +10,7 @@ The match limits you see are proposed defaults: 15 lb **and** 10% of the lighter
 2. Tap **Start Saturday session**.
 3. Camp fighters are already checked in. Uncheck anyone who is absent. Volunteers are everyone else with weight and skill, including people who are not in the active camp. A person who is checked in as a fighter is not on the volunteer list. People missing weight or skill stay off the lists.
 4. If someone walks in, type their name and weight, then tap **Add and check in**. They are saved on the roster.
-5. Open **Session limits** only if you mean to change the numbers. You must tick the confirmation. That change is still not a safety certification.
+5. Open **Session limits** only if you mean to change the matching numbers or the round timing (default 3 min rounds, 60 sec rest).
 6. Tap **Generate rundown**.
 
 If a complete card is impossible, the screen says why and what you can do next, such as add a volunteer. It will not quietly drop a fighter to two sessions.
@@ -24,6 +24,7 @@ With 5 or more fighters, each block can use Main ring, Floor 1, and Floor 2. Wit
 - **Mark block complete** means both rounds happened. An interruption does not count as a finished two-round session.
 - **Regenerate unfinished** builds a new card and leaves completed and locked matches as they were.
 - **Print** opens a black-on-white rundown you can print or share.
+- **Estimated time** on the rundown and print counts every round plus rest between rounds. It does not include setup or delays.
 
 The revision number on the screen goes up after each save. If another coach saved first, refresh and try again. Your older screen will not overwrite theirs.
 

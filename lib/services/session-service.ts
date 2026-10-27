@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isReadyForHardMatch } from "@/lib/domain/profile";
-import { saturdayPresetSettings, PROPOSED_LIMITS_NOTICE, type MatchingLimits } from "@/lib/domain/types";
+import { saturdayPresetSettings, type MatchingLimits } from "@/lib/domain/types";
 import { can } from "@/lib/permissions";
 import { appTimezone } from "@/lib/env";
 import type { Athlete, Attendance, SessionRecord } from "@/lib/repository/types";
@@ -144,7 +144,6 @@ export async function getSession(actor: Actor, sessionId: string, requestId = "r
       assignments: active,
       corrupt: view.corrupt,
       eligibility,
-      limitsNotice: PROPOSED_LIMITS_NOTICE,
     },
   };
 }
@@ -256,8 +255,8 @@ export async function putAttendance(
 export async function updateSettings(
   actor: Actor,
   sessionId: string,
-  body: { requestId: string; expectedRevision: number; confirmLimitsChange: boolean; limits: MatchingLimits },
-): Promise<ServiceResult<{ limits: MatchingLimits; notice: string }>> {
+  body: { requestId: string; expectedRevision: number; limits: MatchingLimits; timing: { roundMinutes: number; restSeconds: number } },
+): Promise<ServiceResult<{ limits: MatchingLimits; timing: { roundMinutes: number; restSeconds: number } }>> {
   return withWrite({
     actor,
     action: "runSession",
@@ -267,18 +266,11 @@ export async function updateSettings(
     eventType: "session.settings",
     run: async ({ session }) => {
       if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
-      const changed = JSON.stringify(session.settings.limits) !== JSON.stringify(body.limits);
-      if (changed && !body.confirmLimitsChange) {
-        throw new ServiceStop(fail(400, "CONFIRM_LIMITS", "Confirm the numeric limit change before saving. These limits are not safety-certified.", body.requestId));
-      }
-      const notice = changed
-        ? "Coach-edited numeric limits for this Saturday only. Still not a safety certification. The coach decides suitability."
-        : PROPOSED_LIMITS_NOTICE;
       return {
-        data: { limits: body.limits, notice },
+        data: { limits: body.limits, timing: body.timing },
         session: {
           ...session,
-          settings: { ...session.settings, limits: body.limits, limitsPendingCoachReview: true, limitsNotice: notice },
+          settings: { ...session.settings, limits: body.limits, timing: body.timing },
         },
       };
     },

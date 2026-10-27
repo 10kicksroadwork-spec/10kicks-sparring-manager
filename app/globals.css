@@ -71,6 +71,11 @@ a { color: inherit; }
   padding: 0 12px;
 }
 
+.roster-entry summary::-webkit-details-marker { display: none; }
+.roster-entry[open] .roster-chevron { transform: rotate(180deg); }
+.roster-chevron { display: inline-block; transition: transform 120ms ease; font-size: 1.25rem; }
+.roster-entry summary:focus-visible { outline: 2px solid var(--gold); outline-offset: 4px; border-radius: 4px; }
+
 .banner {
   border-radius: 14px;
   padding: 12px 14px;

@@ -2,11 +2,12 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { GET as getAthletes, POST as postAthletes } from "@/app/api/athletes/route";
 import { POST as postRestrictions } from "@/app/api/restrictions/route";
 import { createAthlete } from "@/lib/services/athlete-service";
-import { putAttendance, createSession, ensureCampFighters, getSession } from "@/lib/services/session-service";
+import { putAttendance, createSession, ensureCampFighters, getSession, updateSettings } from "@/lib/services/session-service";
 import { completeBlock, generate, regenerate, unpublishRundown } from "@/lib/services/schedule-service";
 import { resetMemoryStore } from "@/lib/repository/memory";
 import { createMemoryLock, createUnavailableLock, getLockManager, resetMemoryLocks, setLockManagerForTests } from "@/lib/redis/lock";
 import { parseAthleteRow } from "@/lib/sheets/rows";
+import { saturdayPresetSettings } from "@/lib/domain/types";
 import { testAuthEnabled } from "@/lib/api/guard";
 import { authRequired, integrationStatus } from "@/lib/env";
 import { getRepository } from "@/lib/repository";
@@ -125,6 +126,34 @@ describe("API guards", () => {
 });
 
 describe("session writes", () => {
+  it("saves session timing and revised limits without an acknowledgement checkbox", async () => {
+    const created = await createSession(coach, { requestId: "req-timing-create" });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const sessionId = created.data.session.sessionId;
+    const initialRevision = created.revision ?? created.data.session.revision;
+    const originalLimits = saturdayPresetSettings().limits;
+    const nextLimits = { ...originalLimits, maxWeightDifferenceLbs: 20 };
+    const saved = await updateSettings(coach, sessionId, {
+      requestId: "req-timing-save",
+      expectedRevision: initialRevision,
+      limits: nextLimits,
+      timing: { roundMinutes: 2, restSeconds: 30 },
+    });
+    expect(saved.ok).toBe(true);
+    const read = await getSession(coach, sessionId);
+    expect(read.ok).toBe(true);
+    if (!read.ok) return;
+    expect(read.data.session.settings.limits.maxWeightDifferenceLbs).toBe(20);
+    expect(read.data.session.settings.timing).toEqual({ roundMinutes: 2, restSeconds: 30 });
+    const stale = await updateSettings(coach, sessionId, {
+      requestId: "req-timing-stale",
+      expectedRevision: initialRevision,
+      limits: originalLimits,
+      timing: { roundMinutes: 3, restSeconds: 60 },
+    });
+    expect(stale.ok).toBe(false);
+  });
   it("keeps a new athlete and check-in, rejects a stale revision, and replays generate", async () => {
     const created = await createAthlete(coach, athleteBody("Demo Fighter A", "FIGHTER"));
     expect(created.ok).toBe(true);

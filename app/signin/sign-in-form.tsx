@@ -16,7 +16,6 @@ export function SignInForm() {
       <form action="/api/auth/signin/google" method="get">
         <button className="tap tap-gold h-12 w-full text-base" type="submit">Sign in with Google</button>
       </form>
-      <p className="text-sm text-[var(--muted)]">Match limits in this app are proposed defaults pending coach review. They are not a safety certification.</p>
     </main>
   );
 }

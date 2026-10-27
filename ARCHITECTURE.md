@@ -8,7 +8,7 @@ The app is a Next.js App Router project. Coach pages are client screens. Every A
 
 One assignment is one hard match of two rounds. `INTERRUPTED` occupies the block and the pairing, and it does not count as a completed two-round session. Light/recovery is text on the rundown, not a row.
 
-Proposed limits live in `PROPOSED_MATCH_LIMITS` and `PROPOSED_LIMITS_NOTICE`. All four numbers apply together. `limitsPendingCoachReview` stays true.
+Default limits live in `PROPOSED_MATCH_LIMITS`. Weight in pounds, weight as a percent of the lighter person, and skill apply together. Round timing (`roundMinutes`, `restSeconds`) is stored in the session settings JSON. `parseSettings` fills in defaults for older sessions, so no migration is needed. `lib/domain/timing.ts` computes the estimated session length.
 
 ## Persistence
 

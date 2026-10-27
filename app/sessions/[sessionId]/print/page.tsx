@@ -2,11 +2,12 @@
 
 import { use, useEffect, useState } from "react";
 import { api, locationLabel } from "@/components/common/client";
+import { estimateDuration, formatDuration, type RoundTiming } from "@/lib/domain/timing";
 import { locationsForFighterCount, type Location } from "@/lib/domain/types";
 
 type Assignment = { assignmentId: string; blockIndex: number; location: string; fighterId: string; volunteerId: string; status: string };
 type View = {
-  session: { dateLocal: string; timezone: string; revision: number };
+  session: { dateLocal: string; timezone: string; revision: number; settings: { timing: RoundTiming; hardRoundsPerSession: number } };
   attendance: { athleteId: string; displayName: string; assignedRole: string }[];
   assignments: Assignment[];
 };
@@ -26,6 +27,8 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
   const names = new Map(view?.attendance.map((row) => [row.athleteId, row.displayName]) ?? []);
   const blocks = [...new Set(view?.assignments.map((row) => row.blockIndex) ?? [])].sort((a, b) => a - b);
   const fighterCount = new Set(view?.assignments.map((row) => row.fighterId) ?? []).size;
+  const maxBlock = blocks.at(-1) ?? 0;
+  const duration = view && maxBlock > 0 ? estimateDuration(maxBlock, view.session.settings.hardRoundsPerSession, view.session.settings.timing) : null;
   const used = new Set(view?.assignments.map((row) => row.location) ?? []);
   const columns = (["MAIN_RING", "FLOOR_1", "FLOOR_2"] as Location[]).filter(
     (location) => locationsForFighterCount(fighterCount).includes(location) || used.has(location),
@@ -37,6 +40,7 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
       <h1 className="font-display text-4xl">Hard sparring rundown</h1>
       <p>{view?.session.dateLocal} · {view?.session.timezone} · revision {view?.session.revision}</p>
       <p className="mt-2 text-sm">Each hard match is two rounds. Light/recovery is a placeholder and is not an assigned partner.</p>
+      {duration ? <p className="mt-2 text-sm" data-testid="print-duration"><strong>Estimated time: {formatDuration(duration.totalSeconds)}</strong> · {duration.roundCount} rounds, {view?.session.settings.timing.roundMinutes} min each, {view?.session.settings.timing.restSeconds} sec rest</p> : null}
       {error ? <p role="alert">{error}</p> : null}
       <table className="mt-4 w-full border-collapse text-left text-sm">
         <thead>

@@ -36,10 +36,15 @@ export const limitsSchema = z.object({
   maxAggressionDifference: z.number().int().min(0).max(4),
 });
 
+export const timingSchema = z.object({
+  roundMinutes: z.number().int().min(1).max(15),
+  restSeconds: z.number().int().min(0).max(300),
+});
+
 export const settingsSchema = z.object({
   ...mutationMeta,
-  confirmLimitsChange: z.boolean(),
   limits: limitsSchema,
+  timing: timingSchema,
 });
 
 export const attendancePutSchema = z.object({
