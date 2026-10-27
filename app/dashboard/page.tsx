@@ -5,11 +5,13 @@ import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
 import { api, newRequestId } from "@/components/common/client";
 
+type SessionRow = { sessionId: string; dateLocal: string; status: string; revision: number };
+
 type Bootstrap = {
   actor: { email: string; role: string };
   activeSessionId: string | null;
   athleteCount: number;
-  sessions: { sessionId: string; dateLocal: string; status: string; revision: number }[];
+  sessions: SessionRow[];
   corrupt: string[];
   integrations: { supabase: string; lock: string; auth: string; store: string };
 };
@@ -19,6 +21,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<Bootstrap | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   useEffect(() => {
     void api<Bootstrap>("/api/bootstrap").then((result) => {
@@ -30,6 +33,15 @@ export default function DashboardPage() {
       setData(result.data);
     });
   }, [router]);
+
+  async function reload() {
+    const result = await api<Bootstrap>("/api/bootstrap");
+    if (!result.ok) {
+      setError(result.error.message);
+      return;
+    }
+    setData(result.data);
+  }
 
   async function startSaturday() {
     setBusy(true);
@@ -44,6 +56,30 @@ export default function DashboardPage() {
       return;
     }
     router.push(`/sessions/${result.data.session.sessionId}/attendance`);
+  }
+
+  async function deleteSession(session: SessionRow) {
+    const label = `${session.dateLocal} (${session.status})`;
+    if (!window.confirm(`Permanently delete ${label}? Attendance, matches, and audit for that Saturday are removed. This cannot be undone.`)) {
+      return;
+    }
+    setDeletingId(session.sessionId);
+    setError("");
+    const result = await api<{ deleted: true }>(`/api/sessions/${session.sessionId}`, {
+      method: "DELETE",
+      body: JSON.stringify({
+        requestId: newRequestId(),
+        expectedRevision: session.revision,
+        confirm: true,
+      }),
+    });
+    setDeletingId(null);
+    if (!result.ok) {
+      setError(result.error.message);
+      await reload();
+      return;
+    }
+    await reload();
   }
 
   return (
@@ -71,11 +107,21 @@ export default function DashboardPage() {
         <h2 className="font-display text-3xl">Previous sessions</h2>
         <ul className="mt-3 grid gap-2">
           {(data?.sessions ?? []).map((session) => (
-            <li key={session.sessionId}>
-              <a className="card block min-h-11" href={`/sessions/${session.sessionId}/rundown`}>
+            <li key={session.sessionId} className="card flex items-center gap-2" data-testid={`session-row-${session.sessionId}`}>
+              <a className="min-h-11 flex-1" href={`/sessions/${session.sessionId}/rundown`}>
                 <span className="font-semibold">{session.dateLocal}</span>
                 <span className="ml-2 text-[var(--muted)]">{session.status} · rev {session.revision}</span>
               </a>
+              <button
+                className="tap shrink-0 text-[var(--danger)]"
+                type="button"
+                aria-label={`Delete session ${session.dateLocal}`}
+                data-testid={`delete-session-${session.sessionId}`}
+                disabled={deletingId === session.sessionId || busy}
+                onClick={() => void deleteSession(session)}
+              >
+                {deletingId === session.sessionId ? "…" : "×"}
+              </button>
             </li>
           ))}
         </ul>

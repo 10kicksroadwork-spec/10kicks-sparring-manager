@@ -12,6 +12,7 @@ export function Shell({ children }: { children: React.ReactNode }) {
           <nav className="flex gap-2 text-sm">
             <Link className="tap" href="/dashboard">Saturday</Link>
             <Link className="tap" href="/athletes">Roster</Link>
+            <Link className="tap" href="/attendance">Attendance</Link>
           </nav>
         </div>
       </header>
