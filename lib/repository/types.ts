@@ -10,9 +10,9 @@ export type SessionStatus = "DRAFT" | "READY" | "IN_PROGRESS" | "COMPLETED" | "C
 export type Athlete = {
   athleteId: string;
   displayName: string;
-  weightLbs: number;
-  skill: number;
-  aggression: number;
+  weightLbs: number | null;
+  skill: number | null;
+  aggression: number | null;
   roleEligibility: RoleEligibility;
   active: boolean;
   coachNotes: string;
@@ -44,7 +44,7 @@ export type Attendance = {
   availabilityStatus: Availability;
   weightLbsSnapshot: number;
   skillSnapshot: number;
-  aggressionSnapshot: number;
+  aggressionSnapshot: number | null;
   checkedInAt: string;
   updatedAt: string;
 };
@@ -103,7 +103,7 @@ export type CommitBatch = {
 export type ReadResult<T> = { rows: T[]; corrupt: string[] };
 
 export interface SparringRepository {
-  kind: "memory" | "sheets";
+  kind: "memory" | "sheets" | "supabase";
   readAthletes(): Promise<ReadResult<Athlete>>;
   readSessions(): Promise<ReadResult<SessionRecord>>;
   readAttendance(sessionId?: string): Promise<ReadResult<Attendance>>;

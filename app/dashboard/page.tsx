@@ -11,7 +11,7 @@ type Bootstrap = {
   athleteCount: number;
   sessions: { sessionId: string; dateLocal: string; status: string; revision: number }[];
   corrupt: string[];
-  integrations: { sheets: string; redis: string; auth: string; store: string };
+  integrations: { supabase: string; lock: string; auth: string; store: string };
 };
 
 export default function DashboardPage() {
@@ -52,12 +52,12 @@ export default function DashboardPage() {
       <h1 className="font-display text-5xl leading-none">Saturday session</h1>
       {data ? <p className="mt-2 text-[var(--muted)]">{data.actor.email} · {data.actor.role} · {data.athleteCount} active athletes</p> : <p className="mt-2">Loading…</p>}
       {data?.integrations.store === "missing" ? (
-        <p className="banner mt-4" role="status">Spreadsheet is not connected. The desk can open, but attendance will not save until the gym sheet is shared.</p>
+        <p className="banner mt-4" role="status">Database is not connected. The desk can open, but attendance will not save until Supabase is connected.</p>
       ) : null}
-      {data?.integrations.redis === "missing" && data.integrations.store !== "memory" ? (
-        <p className="banner mt-4" role="status">Write lock is not configured, so saves stay paused. That is intentional until Redis is connected.</p>
+      {data?.integrations.lock === "missing" && data.integrations.store !== "memory" ? (
+        <p className="banner mt-4" role="status">Write lock is not configured, so saves stay paused.</p>
       ) : null}
-      {data?.corrupt.length ? <p className="banner mt-4" role="alert">Some spreadsheet rows look corrupt and were skipped. {data.corrupt[0]}</p> : null}
+      {data?.corrupt.length ? <p className="banner mt-4" role="alert">Some roster rows look corrupt and were skipped. {data.corrupt[0]}</p> : null}
       {error ? <p className="banner mt-4" role="alert">{error}</p> : null}
       <div className="mt-6 grid gap-3">
         {data?.activeSessionId ? (

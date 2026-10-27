@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { authRequired } from "@/lib/env";
 
 export function proxy(request: NextRequest) {
+  if (!authRequired()) return NextResponse.next();
   const path = request.nextUrl.pathname;
   const needsAuth = path.startsWith("/dashboard") || path.startsWith("/athletes") || path.startsWith("/sessions");
   if (!needsAuth) return NextResponse.next();

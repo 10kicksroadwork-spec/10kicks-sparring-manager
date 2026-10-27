@@ -7,6 +7,7 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     env: {
+      AUTH_REQUIRED: "1",
       SPARRING_STORE: "memory",
       E2E_TEST_AUTH: "1",
       AUTH_SECRET: "unit-test-secret",

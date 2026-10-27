@@ -69,14 +69,15 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   expect(count).toBe(19);
   for (let index = 0; index < count; index += 1) {
     const box = boxes.nth(index);
+    if (await box.isChecked()) continue;
     await box.click();
     await expect(box).toBeChecked();
   }
+  await expect(page.getByText("saving")).toHaveCount(0);
 
   await page.getByTestId("walkin-name").fill("Demo Walk-In");
   await page.getByTestId("walkin-weight").fill("160");
   await page.getByLabel("Walk-in skill").fill("3");
-  await page.getByLabel("Walk-in aggression").fill("3");
   await page.getByTestId("add-volunteer").click();
   await expect(page.getByText("Demo Walk-In is checked in.")).toBeVisible();
   await page.getByTestId("generate-rundown").click();
@@ -100,6 +101,7 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   const volunteerBox = page.getByRole("checkbox", { name: new RegExp(`^${removable} `) });
   await volunteerBox.click();
   await expect(volunteerBox).not.toBeChecked();
+  await expect(page.getByText("saving")).toHaveCount(0);
 
   await page.getByRole("link", { name: "Session limits" }).click();
   await expect(page.getByText(/pending coach safety review/i)).toBeVisible();

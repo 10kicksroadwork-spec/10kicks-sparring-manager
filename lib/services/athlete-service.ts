@@ -8,12 +8,12 @@ export async function listAthletes(actor: Actor, requestId = "read"): Promise<Se
   const opened = await openStore(requestId);
   if ("ok" in opened) return opened;
   const result = await opened.repo.readAthletes();
-  return { ok: true, data: { athletes: result.rows.filter((athlete) => athlete.active || actor.role === "admin"), corrupt: result.corrupt }, requestId };
+  return { ok: true, data: { athletes: result.rows, corrupt: result.corrupt }, requestId };
 }
 
 export async function createAthlete(
   actor: Actor,
-  input: { displayName: string; weightLbs: number; skill: number; aggression: number; roleEligibility: Athlete["roleEligibility"]; coachNotes?: string; requestId: string },
+  input: { displayName: string; weightLbs: number; skill: number; aggression?: number | null; roleEligibility: Athlete["roleEligibility"]; coachNotes?: string; requestId: string },
 ): Promise<ServiceResult<{ athlete: Athlete }>> {
   const now = nowIso();
   const athlete: Athlete = {
@@ -21,7 +21,7 @@ export async function createAthlete(
     displayName: input.displayName.trim(),
     weightLbs: input.weightLbs,
     skill: input.skill,
-    aggression: input.aggression,
+    aggression: input.aggression ?? null,
     roleEligibility: input.roleEligibility,
     active: true,
     coachNotes: input.coachNotes?.trim() ?? "",

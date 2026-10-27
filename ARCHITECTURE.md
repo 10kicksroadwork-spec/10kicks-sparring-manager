@@ -1,6 +1,6 @@
 # Architecture
 
-The app is a Next.js App Router project. Coach pages are client screens. Every privileged API route runs on the Node.js runtime, checks the allowlist, and talks to Google Sheets only from the server.
+The app is a Next.js App Router project. Coach pages are client screens. Every API route runs on the Node.js runtime. Google sign-in is off unless `AUTH_REQUIRED=1`. The server talks to Supabase with the service role key. That key is not sent to the browser.
 
 ## Saturday model
 
@@ -12,7 +12,7 @@ Proposed limits live in `PROPOSED_MATCH_LIMITS` and `PROPOSED_LIMITS_NOTICE`. Al
 
 ## Persistence
 
-The source of truth is a gym-owned Google Sheet with seven tabs: Athletes, Sessions, Attendance, Assignments, Restrictions, Overrides, and AuditLog. The service account has the spreadsheets scope only. `sheets:init` adds missing tabs and headers and will not replace a header row that does not match.
+The source of truth is Supabase Postgres. Tables are `athletes`, `sessions`, `attendance`, `assignments`, `restrictions`, `overrides`, and `audit_log`. Row level security is on and there are no anon policies. The owner adds people in the Table Editor or the roster screen. The old Sheets client is unused.
 
 A generate writes a new generation and points `Sessions.active_generation_id` at it in one batch. Older assignment rows stay. Cell values are strings or numbers, not formulas.
 
@@ -20,7 +20,7 @@ A generate writes a new generation and points `Sessions.active_generation_id` at
 
 ## Concurrency
 
-Upstash Redis holds a `SET NX PX` lock. The search runs outside the lock. Inside the lock the server rereads the revision, revalidates, and commits. Release uses a token check so one worker cannot drop another's lock. If Redis is missing, writes return 503 and reads can still open.
+A Postgres `locks` table holds a compare-and-set lock for one coach write at a time. The search runs outside the lock. Inside the lock the server rereads the revision, revalidates, and commits in one database function. Release deletes the row only when the token matches. If Supabase is missing, writes return 503 and the desk can still open. Redis is not required.
 
 The same `requestId` replays the stored audit result instead of publishing a second generation.
 

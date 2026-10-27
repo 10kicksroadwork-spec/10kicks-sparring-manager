@@ -62,7 +62,10 @@ export async function toScheduleInput(
   const present = view.attendance.filter((row) => row.present);
   const unavailable = new Set(present.filter((row) => row.availabilityStatus !== "AVAILABLE").map((row) => row.athleteId));
   const fighters = present.filter((row) => row.assignedRole === "FIGHTER").map((row) => snapshotAthlete(row, names.get(row.athleteId) || "Fighter"));
-  const volunteers = present.filter((row) => row.assignedRole === "VOLUNTEER").map((row) => snapshotAthlete(row, names.get(row.athleteId) || "Volunteer"));
+  const fighterIds = new Set(fighters.map((fighter) => fighter.athleteId));
+  const volunteers = present
+    .filter((row) => row.assignedRole === "VOLUNTEER" && !fighterIds.has(row.athleteId))
+    .map((row) => snapshotAthlete(row, names.get(row.athleteId) || "Volunteer"));
   const numericOverrides: NumericOverride[] = overrides.rows.map((row) => ({
     overrideId: row.overrideId,
     sessionId: row.sessionId,

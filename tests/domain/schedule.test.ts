@@ -32,7 +32,7 @@ function input(overrides: Partial<ScheduleInput> = {}): ScheduleInput {
     requiredHardSessions: 3,
     maxVolunteerSessions: 2,
     restGapBlocks: 1,
-    scoringWeights: { weight: 0.4, skill: 0.3, aggression: 0.3 },
+    scoringWeights: { weight: 0.4, skill: 0.6, aggression: 0 },
     maxBlockHorizon: 12,
     ...overrides,
   };
@@ -64,6 +64,36 @@ function override(partial: Partial<NumericOverride> = {}): NumericOverride {
 }
 
 describe("Saturday rules", () => {
+  it("accepts skill 7 with no aggression and blocks a bad skill or missing weight", () => {
+    const ready = validateSchedule(
+      input({
+        fighters: [{ athleteId: "f", displayName: "Ready", weightLbs: 190, skill: 7, aggression: null }],
+      }),
+      [],
+      { mode: "partial" },
+    );
+    expect(ready.errors.some((error) => error.code === "INCOMPLETE_PROFILE")).toBe(false);
+
+    const missingWeight = validateSchedule(
+      input({
+        fighters: [{ athleteId: "f", displayName: "Directory", weightLbs: 0, skill: 7, aggression: null }],
+      }),
+      [],
+      { mode: "partial" },
+    );
+    expect(missingWeight.ok).toBe(false);
+    expect(missingWeight.errors.some((error) => error.code === "INCOMPLETE_PROFILE" && error.message.includes("weight"))).toBe(true);
+
+    const skill = validateSchedule(
+      input({
+        fighters: [{ athleteId: "f", displayName: "High", weightLbs: 190, skill: 8, aggression: null }],
+      }),
+      [],
+      { mode: "partial" },
+    );
+    expect(skill.errors.some((error) => error.code === "INCOMPLETE_PROFILE" && error.message.includes("1 to 7"))).toBe(true);
+  });
+
   it("labels the numeric thresholds as pending coach review", () => {
     expect(PROPOSED_LIMITS_NOTICE.toLowerCase()).toContain("pending coach");
     expect(PROPOSED_LIMITS_NOTICE.toLowerCase()).toContain("not safety-certified");
@@ -127,6 +157,22 @@ describe("Saturday rules", () => {
     expect(blocked.status).toBe("FEASIBLE");
   });
 
+  it("uses two locations when fewer than five fighters are checked in", () => {
+    const schedule = input({
+      fighters: [1, 2, 3, 4].map((n) => athlete(`f${n}`)),
+      volunteers: Array.from({ length: 12 }, (_, i) => athlete(`v${i + 1}`)),
+    });
+    const result = solve(schedule);
+    expect(result.status).toBe("FEASIBLE");
+    if (result.status !== "FEASIBLE") return;
+    expect(new Set(result.assignments.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+    expect(result.assignments.some((row) => row.location === "FLOOR_2")).toBe(false);
+    const byBlock = new Map<number, number>();
+    for (const row of result.assignments) byBlock.set(row.blockIndex, (byBlock.get(row.blockIndex) ?? 0) + 1);
+    for (const count of byBlock.values()) expect(count).toBeLessThanOrEqual(2);
+    expect(validateSchedule(schedule, result.assignments).ok).toBe(true);
+  }, 20_000);
+
   it("does not count an interruption as a completed two-round session", () => {
     expect(HARD_ROUNDS_PER_ASSIGNMENT).toBe(2);
     expect(countsAsCompletedTwoRoundSession("COMPLETED")).toBe(true);
@@ -152,7 +198,7 @@ describe("Saturday rules", () => {
     expect(evaluatePair({ ...base, fighter, volunteer: withinBoth }).eligible).toBe(false);
   });
 
-  it("enforces skill and aggression independently", () => {
+  it("enforces skill and ignores aggression", () => {
     const base = { sessionId: "s1", limits: { ...PROPOSED_MATCH_LIMITS }, restrictions: [], overrides: [] };
     const skill = evaluatePair({
       ...base,
@@ -161,15 +207,13 @@ describe("Saturday rules", () => {
     });
     expect(skill.eligible).toBe(false);
     expect(skill.reasonCodes).toContain("SKILL");
-    expect(skill.reasonCodes).not.toContain("AGGRESSION");
 
     const aggression = evaluatePair({
       ...base,
       fighter: athlete("f1", 160, 3, 1),
-      volunteer: athlete("v1", 160, 3, 3),
+      volunteer: athlete("v1", 160, 3, 5),
     });
-    expect(aggression.eligible).toBe(false);
-    expect(aggression.reasonCodes).toContain("AGGRESSION");
+    expect(aggression.eligible).toBe(true);
     expect(aggression.reasonCodes).not.toContain("SKILL");
   });
 
@@ -202,6 +246,33 @@ describe("Saturday rules", () => {
     const allowed = evaluatePair({ ...args, overrides: [override()] });
     expect(allowed.eligible).toBe(true);
     expect(allowed.overrideId).toBe("ov1");
+  });
+
+  it("asks for volunteers instead of pairing fighters with themselves", () => {
+    const result = solve(
+      input({
+        fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+        volunteers: [],
+      }),
+    );
+    expect(result.status).toBe("UNSAT");
+    if (result.status !== "UNSAT") return;
+    expect(result.diagnostics.some((d) => d.code === "EMPTY_VOLUNTEER_ATTENDANCE")).toBe(true);
+    expect(result.diagnostics.some((d) => /themselves/i.test(d.message))).toBe(true);
+    expect("assignments" in result).toBe(false);
+  });
+
+  it("refuses a person who is listed as both fighter and volunteer", () => {
+    const result = solve(
+      input({
+        fighters: [athlete("same")],
+        volunteers: [athlete("same"), athlete("v1")],
+      }),
+    );
+    expect(result.status).toBe("UNSAT");
+    if (result.status !== "UNSAT") return;
+    expect(result.diagnostics.some((d) => d.code === "ROLE_CONFLICT")).toBe(true);
+    expect("assignments" in result).toBe(false);
   });
 
   it("does not publish an empty fighter list", () => {

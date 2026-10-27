@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { coachNextSteps } from "@/lib/domain/diagnostics";
+import { rundownStarted } from "@/lib/domain/rundown";
 import { solveSchedule } from "@/lib/domain/solver";
 import type { Assignment, Location, SolveResult } from "@/lib/domain/types";
 import { validateSchedule } from "@/lib/domain/validator";
@@ -140,6 +141,43 @@ async function persistSolve(
 
 export async function regenerate(actor: Actor, sessionId: string, body: { requestId: string; expectedRevision: number }) {
   return persistSolve(actor, sessionId, body, "regenerate", true);
+}
+
+export async function unpublishRundown(
+  actor: Actor,
+  sessionId: string,
+  body: { requestId: string; expectedRevision: number },
+): Promise<ServiceResult<{ cleared: boolean }>> {
+  return withWrite({
+    actor,
+    action: "runSession",
+    sessionId,
+    expectedRevision: body.expectedRevision,
+    requestId: body.requestId,
+    eventType: "schedule.unpublish",
+    run: async ({ repo, session }) => {
+      if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      if (!session.activeGenerationId) {
+        throw new ServiceStop(fail(409, "NOT_GENERATED", "There is no rundown to discard.", body.requestId));
+      }
+      const view = await loadSession(repo, sessionId);
+      const active = view ? activeAssignments(view) : [];
+      if (rundownStarted(session.status, active)) {
+        throw new ServiceStop(
+          fail(
+            409,
+            "RUNDOWN_STARTED",
+            "Sparring has started. Completed and locked matches stay. Regenerate the unfinished part instead of discarding the card.",
+            body.requestId,
+          ),
+        );
+      }
+      return {
+        data: { cleared: true },
+        session: { ...session, activeGenerationId: "", status: "READY" },
+      };
+    },
+  });
 }
 
 export async function patchAssignment(

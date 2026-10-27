@@ -1,7 +1,9 @@
 import { Redis } from "@upstash/redis";
+import { supabaseConfigured } from "@/lib/env";
+import { getSupabaseAdmin } from "@/lib/supabase/admin";
 
 export type LockManager = {
-  mode: "redis" | "memory" | "unavailable";
+  mode: "redis" | "postgres" | "memory" | "unavailable";
   acquire(key: string, token: string, ttlMs: number): Promise<boolean>;
   release(key: string, token: string): Promise<void>;
 };
@@ -55,6 +57,31 @@ function redis(): Redis | null {
   return redisClient;
 }
 
+function lockFailed(): Error {
+  const error = new Error("The database lock could not run");
+  error.name = "LOCK_UNAVAILABLE";
+  return error;
+}
+
+export function createPostgresLock(): LockManager {
+  return {
+    mode: "postgres",
+    async acquire(key, token, ttlMs) {
+      const { data, error } = await getSupabaseAdmin().rpc("acquire_sparring_lock", {
+        p_key: key,
+        p_token: token,
+        p_ttl_ms: ttlMs,
+      });
+      if (error) throw lockFailed();
+      return data === true;
+    },
+    async release(key, token) {
+      const { error } = await getSupabaseAdmin().rpc("release_sparring_lock", { p_key: key, p_token: token });
+      if (error) console.error("lock release failed");
+    },
+  };
+}
+
 export function createRedisLock(): LockManager {
   return {
     mode: "redis",
@@ -80,11 +107,12 @@ export function setLockManagerForTests(lock: LockManager | null): void {
   testLock = lock;
 }
 
-/** Production writes require Redis. The memory lock exists only for the test store. */
+/** Production writes use a Postgres lock on the Supabase project. Redis stays optional. */
 export function getLockManager(): LockManager {
   if (process.env.NODE_ENV !== "production" && testLock) return testLock;
   const memoryAllowed = process.env.SPARRING_STORE === "memory" && process.env.NODE_ENV !== "production";
   if (memoryAllowed) return createMemoryLock();
+  if (supabaseConfigured()) return createPostgresLock();
   if (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN) return createRedisLock();
   return createUnavailableLock();
 }

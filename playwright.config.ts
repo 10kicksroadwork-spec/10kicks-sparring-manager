@@ -18,6 +18,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       ...process.env,
+      AUTH_REQUIRED: "1",
       SPARRING_STORE: "memory",
       E2E_TEST_AUTH: "1",
       AUTH_SECRET: "e2e-only-secret",

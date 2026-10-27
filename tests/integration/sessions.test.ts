@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { GET as getAthletes, POST as postAthletes } from "@/app/api/athletes/route";
 import { POST as postRestrictions } from "@/app/api/restrictions/route";
 import { createAthlete } from "@/lib/services/athlete-service";
-import { putAttendance, createSession } from "@/lib/services/session-service";
-import { completeBlock, generate, regenerate } from "@/lib/services/schedule-service";
+import { putAttendance, createSession, ensureCampFighters, getSession } from "@/lib/services/session-service";
+import { completeBlock, generate, regenerate, unpublishRundown } from "@/lib/services/schedule-service";
 import { resetMemoryStore } from "@/lib/repository/memory";
 import { createMemoryLock, createUnavailableLock, getLockManager, resetMemoryLocks, setLockManagerForTests } from "@/lib/redis/lock";
 import { parseAthleteRow } from "@/lib/sheets/rows";
 import { testAuthEnabled } from "@/lib/api/guard";
+import { authRequired, integrationStatus } from "@/lib/env";
+import { getRepository } from "@/lib/repository";
 
 const coach = { email: "coach@10kicks.test", role: "coach" as const };
 const viewer = { email: "viewer@10kicks.test", role: "viewer" as const };
@@ -68,6 +70,49 @@ describe("API guards", () => {
     const body = await response.json();
     expect(body.error.message.length).toBeGreaterThan(0);
     expect(body.error.message.length).toBeLessThan(400);
+  });
+
+  it("opens the roster as a local coach when Google auth is off", async () => {
+    const previous = process.env.AUTH_REQUIRED;
+    delete process.env.AUTH_REQUIRED;
+    expect(authRequired()).toBe(false);
+    try {
+      const read = await getAthletes(new Request("http://localhost/api/athletes"));
+      expect(read.status).toBe(200);
+      const body = await read.json();
+      expect(body.ok).toBe(true);
+    } finally {
+      process.env.AUTH_REQUIRED = previous;
+    }
+  });
+
+  it("uses Supabase and the Postgres lock in production when the server key is set", () => {
+    const env = process.env as Record<string, string | undefined>;
+    const previous = {
+      NODE_ENV: env.NODE_ENV,
+      SPARRING_STORE: env.SPARRING_STORE,
+      url: env.NEXT_PUBLIC_SUPABASE_URL,
+      key: env.SUPABASE_SERVICE_ROLE_KEY,
+    };
+    env.NODE_ENV = "production";
+    delete env.SPARRING_STORE;
+    env.NEXT_PUBLIC_SUPABASE_URL = "https://example.supabase.co";
+    env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role";
+    try {
+      expect(getRepository().kind).toBe("supabase");
+      expect(getLockManager().mode).toBe("postgres");
+      const status = integrationStatus();
+      expect(status.supabase).toBe("connected");
+      expect(status.store).toBe("supabase");
+      expect(status.lock).toBe("postgres");
+    } finally {
+      env.NODE_ENV = previous.NODE_ENV;
+      env.SPARRING_STORE = previous.SPARRING_STORE;
+      if (previous.url === undefined) delete env.NEXT_PUBLIC_SUPABASE_URL;
+      else env.NEXT_PUBLIC_SUPABASE_URL = previous.url;
+      if (previous.key === undefined) delete env.SUPABASE_SERVICE_ROLE_KEY;
+      else env.SUPABASE_SERVICE_ROLE_KEY = previous.key;
+    }
   });
 
   it("does not enable the test sign-in bypass in production", () => {
@@ -215,6 +260,296 @@ describe("session writes", () => {
   it("reports corrupt sheet rows instead of treating them as athletes", () => {
     const parsed = parseAthleteRow(["id-1", "Broken", "nope", "3", "3", "FIGHTER", "TRUE", "", "t", "t"]);
     expect("error" in parsed).toBe(true);
+  });
+
+  it("keeps a directory row with a blank skill and blocks hard-session check-in", async () => {
+    const parsed = parseAthleteRow(["id-2", "Directory", "", "7", "", "BOTH", "TRUE", "weight_band:180-200", "t", "t"]);
+    expect("athlete" in parsed).toBe(true);
+    if (!("athlete" in parsed)) return;
+    expect(parsed.athlete.weightLbs).toBeNull();
+    expect(parsed.athlete.skill).toBe(7);
+    expect(parsed.athlete.aggression).toBeNull();
+
+    const now = new Date().toISOString();
+    await getRepository().commit({
+      athletes: [{ ...parsed.athlete, athleteId: "dir-1", createdAt: now, updatedAt: now }],
+      audit: {
+        auditId: "audit-dir",
+        sessionId: "roster",
+        actorEmail: coach.email,
+        eventType: "athlete.import",
+        requestId: "req-import-dir",
+        priorRevision: 0,
+        newRevision: 0,
+        timestamp: now,
+        payload: {},
+      },
+    });
+    const session = await createSession(coach, { requestId: "req-dir-session" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    const checked = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-dir-checkin",
+      expectedRevision: session.data.session.revision,
+      athleteId: "dir-1",
+      assignedRole: "FIGHTER",
+      present: true,
+    });
+    expect(checked.ok).toBe(false);
+    if (checked.ok) return;
+    expect(checked.code).toBe("INCOMPLETE_PROFILE");
+    expect(checked.message).not.toMatch(/aggression/i);
+  });
+
+  it("checks in an inactive rated person and will not generate with only fighters", async () => {
+    const now = new Date().toISOString();
+    await getRepository().commit({
+      athletes: [
+        {
+          athleteId: "camp-fighter",
+          displayName: "Camp Fighter",
+          weightLbs: 170,
+          skill: 5,
+          aggression: null,
+          roleEligibility: "BOTH",
+          active: true,
+          coachNotes: "",
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          athleteId: "rated-volunteer",
+          displayName: "Rated Volunteer",
+          weightLbs: 160,
+          skill: 4,
+          aggression: null,
+          roleEligibility: "BOTH",
+          active: false,
+          coachNotes: "",
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      audit: {
+        auditId: "audit-inactive-ready",
+        sessionId: "roster",
+        actorEmail: coach.email,
+        eventType: "athlete.import",
+        requestId: "req-import-inactive",
+        priorRevision: 0,
+        newRevision: 0,
+        timestamp: now,
+        payload: {},
+      },
+    });
+    const session = await createSession(coach, { requestId: "req-inactive-session" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    const checked = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-inactive-checkin",
+      expectedRevision: session.data.session.revision,
+      athleteId: "rated-volunteer",
+      assignedRole: "VOLUNTEER",
+      present: true,
+    });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect(checked.data.attendance.assignedRole).toBe("VOLUNTEER");
+    const stillInactive = (await getRepository().readAthletes()).rows.find((row) => row.athleteId === "rated-volunteer");
+    expect(stillInactive?.active).toBe(false);
+
+    const fighter = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-camp-only",
+      expectedRevision: checked.revision ?? session.data.session.revision,
+      athleteId: "camp-fighter",
+      assignedRole: "FIGHTER",
+      present: true,
+    });
+    expect(fighter.ok).toBe(true);
+    if (!fighter.ok) return;
+    const removed = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-clear-volunteer",
+      expectedRevision: fighter.revision ?? checked.revision ?? session.data.session.revision,
+      athleteId: "rated-volunteer",
+      assignedRole: "VOLUNTEER",
+      present: false,
+      availabilityStatus: "REMOVED",
+    });
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    const generated = await generate(coach, session.data.session.sessionId, {
+      requestId: "req-need-volunteers",
+      expectedRevision: removed.revision ?? fighter.revision ?? session.data.session.revision,
+    });
+    expect(generated.ok).toBe(true);
+    if (!generated.ok) return;
+    const solve = generated.data.solve as { status: string; diagnostics?: { code: string; message: string }[] };
+    expect(generated.data.published).toBe(false);
+    expect(solve.status).toBe("UNSAT");
+    expect(solve.diagnostics?.some((item) => item.code === "EMPTY_VOLUNTEER_ATTENDANCE")).toBe(true);
+    expect(solve.diagnostics?.some((item) => /themselves/i.test(item.message))).toBe(true);
+  });
+
+  it("checks in a person who has weight and skill and no aggression", async () => {
+    const parsed = parseAthleteRow(["id-3", "Mason Cauthen", "170", "5", "", "BOTH", "TRUE", "weight_band:160-180", "t", "t"]);
+    expect("athlete" in parsed).toBe(true);
+    if (!("athlete" in parsed)) return;
+    expect(parsed.athlete.weightLbs).toBe(170);
+    expect(parsed.athlete.skill).toBe(5);
+    expect(parsed.athlete.aggression).toBeNull();
+
+    const now = new Date().toISOString();
+    await getRepository().commit({
+      athletes: [{ ...parsed.athlete, athleteId: "dir-ready", createdAt: now, updatedAt: now }],
+      audit: {
+        auditId: "audit-ready",
+        sessionId: "roster",
+        actorEmail: coach.email,
+        eventType: "athlete.import",
+        requestId: "req-import-ready",
+        priorRevision: 0,
+        newRevision: 0,
+        timestamp: now,
+        payload: {},
+      },
+    });
+    const session = await createSession(coach, { requestId: "req-ready-session" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    const checked = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-ready-checkin",
+      expectedRevision: session.data.session.revision,
+      athleteId: "dir-ready",
+      assignedRole: "FIGHTER",
+      present: true,
+    });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect(checked.data.attendance.weightLbsSnapshot).toBe(170);
+    expect(checked.data.attendance.skillSnapshot).toBe(5);
+    expect(checked.data.attendance.aggressionSnapshot).toBeNull();
+  });
+
+  it("checks camp fighters in when Saturday starts and does not undo an absence", async () => {
+    const camp = await createAthlete(coach, athleteBody("Camp Default", "BOTH"));
+    const volunteerOnly = await createAthlete(coach, athleteBody("Volunteer Only", "VOLUNTEER"));
+    if (!camp.ok || !volunteerOnly.ok) throw new Error("athletes");
+    const session = await createSession(coach, { requestId: "req-camp-seed" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    const view = await getSession(coach, session.data.session.sessionId);
+    expect(view.ok).toBe(true);
+    if (!view.ok) return;
+    const rows = view.data.attendance;
+    expect(rows.find((row) => row.athleteId === camp.data.athlete.athleteId)).toMatchObject({ assignedRole: "FIGHTER", present: true, availabilityStatus: "AVAILABLE" });
+    expect(rows.some((row) => row.athleteId === volunteerOnly.data.athlete.athleteId)).toBe(false);
+
+    const removed = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-camp-absent",
+      expectedRevision: view.revision ?? session.data.session.revision,
+      athleteId: camp.data.athlete.athleteId,
+      assignedRole: "FIGHTER",
+      present: false,
+      availabilityStatus: "REMOVED",
+    });
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    const stayed = await createAthlete(coach, athleteBody("Still Here", "BOTH"));
+    if (!stayed.ok) throw new Error("second");
+    const seeded = await ensureCampFighters(coach, session.data.session.sessionId, {
+      requestId: "req-camp-ensure",
+      expectedRevision: removed.revision ?? 0,
+    });
+    expect(seeded.ok).toBe(true);
+    if (!seeded.ok) return;
+    const after = await getSession(coach, session.data.session.sessionId);
+    expect(after.ok).toBe(true);
+    if (!after.ok) return;
+    expect(after.data.attendance.find((row) => row.athleteId === camp.data.athlete.athleteId)?.present).toBe(false);
+    expect(after.data.attendance.find((row) => row.athleteId === stayed.data.athlete.athleteId)?.assignedRole).toBe("FIGHTER");
+  });
+
+  it("discards an unstarted rundown and keeps one that has started", async () => {
+    const fighter = await createAthlete(coach, athleteBody("Undo Fighter", "FIGHTER"));
+    if (!fighter.ok) throw new Error("fighter");
+    const session = await createSession(coach, { requestId: "req-unpublish-session" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    const now = new Date().toISOString();
+    const record = { ...session.data.session, activeGenerationId: "gen-open", updatedAt: now };
+    await getRepository().commit({
+      session: record,
+      assignmentInserts: [{
+        assignmentId: "asg-open",
+        sessionId: record.sessionId,
+        generationId: "gen-open",
+        blockIndex: 1,
+        location: "MAIN_RING",
+        fighterId: fighter.data.athlete.athleteId,
+        volunteerId: "missing-volunteer",
+        status: "PLANNED",
+        locked: false,
+        updatedAt: now,
+        updatedBy: coach.email,
+      }],
+      audit: {
+        auditId: "audit-open-gen",
+        sessionId: record.sessionId,
+        actorEmail: coach.email,
+        eventType: "test.seed",
+        requestId: "req-seed-open-gen",
+        priorRevision: record.revision,
+        newRevision: record.revision,
+        timestamp: now,
+        payload: {},
+      },
+    });
+    const cleared = await unpublishRundown(coach, record.sessionId, { requestId: "req-unpublish-open", expectedRevision: record.revision });
+    expect(cleared.ok).toBe(true);
+    if (!cleared.ok) return;
+    const open = await getSession(coach, record.sessionId);
+    expect(open.ok).toBe(true);
+    if (!open.ok) return;
+    expect(open.data.session.activeGenerationId).toBe("");
+    expect(open.data.assignments).toHaveLength(0);
+
+    const startedRecord = { ...open.data.session, activeGenerationId: "gen-started" };
+    await getRepository().commit({
+      session: startedRecord,
+      assignmentInserts: [{
+        assignmentId: "asg-started",
+        sessionId: startedRecord.sessionId,
+        generationId: "gen-started",
+        blockIndex: 1,
+        location: "MAIN_RING",
+        fighterId: fighter.data.athlete.athleteId,
+        volunteerId: "missing-volunteer",
+        status: "COMPLETED",
+        locked: false,
+        updatedAt: now,
+        updatedBy: coach.email,
+      }],
+      audit: {
+        auditId: "audit-started-gen",
+        sessionId: startedRecord.sessionId,
+        actorEmail: coach.email,
+        eventType: "test.seed",
+        requestId: "req-seed-started-gen",
+        priorRevision: startedRecord.revision,
+        newRevision: startedRecord.revision,
+        timestamp: now,
+        payload: {},
+      },
+    });
+    const blocked = await unpublishRundown(coach, startedRecord.sessionId, { requestId: "req-unpublish-started", expectedRevision: startedRecord.revision });
+    expect(blocked.ok).toBe(false);
+    if (blocked.ok) return;
+    expect(blocked.code).toBe("RUNDOWN_STARTED");
+    const kept = await getSession(coach, startedRecord.sessionId);
+    expect(kept.ok).toBe(true);
+    if (!kept.ok) return;
+    expect(kept.data.session.activeGenerationId).toBe("gen-started");
+    expect(kept.data.assignments).toHaveLength(1);
   });
 
   it("releases only the lock token that acquired it", async () => {

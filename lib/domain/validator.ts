@@ -2,6 +2,8 @@ import { evaluatePair } from "./matchmaking";
 import {
   LOCATIONS,
   countsAsHardSession,
+  locationsForFighterCount,
+  scheduledFighterCount,
   type Assignment,
   type ConflictDiagnostic,
   type Location,
@@ -9,6 +11,7 @@ import {
   type ValidationResult,
 } from "./types";
 import { diagnostic } from "./diagnostics";
+import { isReadyForHardMatch, SKILL_MAX, SKILL_MIN } from "./profile";
 
 const LOCATION_SET = new Set<string>(LOCATIONS);
 
@@ -17,33 +20,28 @@ function isPositiveInt(value: number): boolean {
 }
 
 function profileIssues(
-  person: { athleteId: string; displayName: string; weightLbs: number; skill: number; aggression: number },
+  person: { athleteId: string; displayName: string; weightLbs: number; skill: number },
   role: string,
 ): ConflictDiagnostic[] {
   const issues: ConflictDiagnostic[] = [];
   if (!person.athleteId || !person.displayName.trim()) {
     issues.push(diagnostic("INCOMPLETE_PROFILE", `${role} is missing an id or name.`, { fighterId: person.athleteId }));
   }
-  if (!(person.weightLbs > 0) || person.weightLbs > 500 || !Number.isFinite(person.weightLbs)) {
-    issues.push(
-      diagnostic("INCOMPLETE_PROFILE", `${person.displayName || role} needs a positive weight in pounds.`, {
-        fighterId: person.athleteId,
-      }),
-    );
-  }
-  if (!Number.isInteger(person.skill) || person.skill < 1 || person.skill > 5) {
-    issues.push(
-      diagnostic("INCOMPLETE_PROFILE", `${person.displayName || role} needs a skill rating from 1 to 5.`, {
-        fighterId: person.athleteId,
-      }),
-    );
-  }
-  if (!Number.isInteger(person.aggression) || person.aggression < 1 || person.aggression > 5) {
-    issues.push(
-      diagnostic("INCOMPLETE_PROFILE", `${person.displayName || role} needs an aggression rating from 1 to 5.`, {
-        fighterId: person.athleteId,
-      }),
-    );
+  if (!isReadyForHardMatch(person)) {
+    if (!(person.weightLbs > 0) || person.weightLbs > 500 || !Number.isFinite(person.weightLbs)) {
+      issues.push(
+        diagnostic("INCOMPLETE_PROFILE", `${person.displayName || role} needs a positive weight in pounds.`, {
+          fighterId: person.athleteId,
+        }),
+      );
+    }
+    if (!Number.isInteger(person.skill) || person.skill < SKILL_MIN || person.skill > SKILL_MAX) {
+      issues.push(
+        diagnostic("INCOMPLETE_PROFILE", `${person.displayName || role} needs a skill rating from ${SKILL_MIN} to ${SKILL_MAX}.`, {
+          fighterId: person.athleteId,
+        }),
+      );
+    }
   }
   return issues;
 }
@@ -161,12 +159,15 @@ export function validateSchedule(
     }
   }
 
+  const mats = locationsForFighterCount(scheduledFighterCount(input));
+  const fixedIds = new Set(input.fixedAssignments.map((row) => row.assignmentId));
   for (const [blockIndex, group] of byBlock) {
-    if (group.length > LOCATIONS.length) {
+    const fixedCount = group.filter((row) => fixedIds.has(row.assignmentId)).length;
+    if (group.length > Math.max(mats.length, fixedCount)) {
       errors.push(
-        diagnostic("BLOCK_CAPACITY_EXCEEDED", `Block ${blockIndex} has ${group.length} hard matches. The gym has 3 locations.`, {
+        diagnostic("BLOCK_CAPACITY_EXCEEDED", `Block ${blockIndex} has ${group.length} hard matches. This Saturday is using ${mats.length} locations.`, {
           blockIndex,
-          details: { count: group.length },
+          details: { count: group.length, locations: mats.length },
         }),
       );
     }
@@ -230,12 +231,23 @@ export function validateSchedule(
       );
     }
     const locations = counting.map((a) => a.location);
-    if (new Set(locations).size !== locations.length) {
+    const allowRepeat = mats.length < input.requiredHardSessions;
+    if (!allowRepeat && new Set(locations).size !== locations.length) {
       errors.push(
         diagnostic("LOCATION_COVERAGE_CONFLICT", `${fighter.displayName} is scheduled in the same location more than once.`, {
           fighterId: fighter.athleteId,
         }),
       );
+    }
+    for (const assignment of counting) {
+      if (!mats.includes(assignment.location) && !fixedIds.has(assignment.assignmentId)) {
+        errors.push(
+          diagnostic("LOCATION_COVERAGE_CONFLICT", `${fighter.displayName} is on ${assignment.location}, which is not used with ${scheduledFighterCount(input)} fighters.`, {
+            fighterId: fighter.athleteId,
+            location: assignment.location,
+          }),
+        );
+      }
     }
     if (counting.length > input.requiredHardSessions) {
       errors.push(
@@ -255,7 +267,7 @@ export function validateSchedule(
           ),
         );
       }
-      const missing = LOCATIONS.filter((location) => !locations.includes(location));
+      const missing = allowRepeat ? [] : mats.filter((location) => !locations.includes(location));
       if (counting.length === input.requiredHardSessions && missing.length > 0) {
         errors.push(
           diagnostic(

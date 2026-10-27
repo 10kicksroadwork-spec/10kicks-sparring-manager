@@ -1,8 +1,11 @@
 import { z } from "zod";
 import { sessionIdentity } from "@/lib/auth";
+import { authRequired } from "@/lib/env";
 import { roleForEmail, type Role } from "@/lib/permissions";
 import { formatZodError } from "@/lib/schemas";
 import type { Actor, ServiceResult } from "@/lib/services/support";
+
+const LOCAL_COACH: Actor = { email: "local-coach@sparring.local", role: "coach" };
 
 const hits = new Map<string, number[]>();
 
@@ -26,6 +29,7 @@ export async function identify(req: Request): Promise<{ actor: Actor | null; aut
     const role = roleForEmail(test);
     return { actor: role ? { email: test, role } : null, authenticated: true };
   }
+  if (!authRequired()) return { actor: LOCAL_COACH, authenticated: true };
   const session = await sessionIdentity();
   if (!session) return { actor: null, authenticated: false };
   if (!session.role) return { actor: null, authenticated: true };

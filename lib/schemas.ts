@@ -13,8 +13,8 @@ export const mutationMeta = {
 export const athleteCreateSchema = z.object({
   displayName: z.string().trim().min(1).max(80),
   weightLbs: z.number().positive().max(500),
-  skill: z.number().int().min(1).max(5),
-  aggression: z.number().int().min(1).max(5),
+  skill: z.number().int().min(1).max(7),
+  aggression: z.number().int().min(1).max(5).nullish(),
   roleEligibility,
   coachNotes: z.string().trim().max(280).optional(),
 });
@@ -32,7 +32,7 @@ export const sessionCreateSchema = z.object({
 export const limitsSchema = z.object({
   maxWeightDifferenceLbs: z.number().positive().max(100),
   maxWeightDifferencePctOfLighterAthlete: z.number().positive().max(100),
-  maxSkillDifference: z.number().int().min(0).max(4),
+  maxSkillDifference: z.number().int().min(0).max(6),
   maxAggressionDifference: z.number().int().min(0).max(4),
 });
 
@@ -49,8 +49,8 @@ export const attendancePutSchema = z.object({
   present: z.boolean().optional(),
   availabilityStatus: z.enum(["AVAILABLE", "DEPARTED", "REMOVED"]).optional(),
   weightLbs: z.number().positive().max(500).optional(),
-  skill: z.number().int().min(1).max(5).optional(),
-  aggression: z.number().int().min(1).max(5).optional(),
+  skill: z.number().int().min(1).max(7).optional(),
+  aggression: z.number().int().min(1).max(5).nullish(),
   createVolunteer: athleteCreateSchema.optional(),
 });
 

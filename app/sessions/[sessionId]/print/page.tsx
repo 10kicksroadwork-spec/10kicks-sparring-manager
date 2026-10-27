@@ -2,6 +2,7 @@
 
 import { use, useEffect, useState } from "react";
 import { api, locationLabel } from "@/components/common/client";
+import { locationsForFighterCount, type Location } from "@/lib/domain/types";
 
 type Assignment = { assignmentId: string; blockIndex: number; location: string; fighterId: string; volunteerId: string; status: string };
 type View = {
@@ -24,6 +25,11 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
 
   const names = new Map(view?.attendance.map((row) => [row.athleteId, row.displayName]) ?? []);
   const blocks = [...new Set(view?.assignments.map((row) => row.blockIndex) ?? [])].sort((a, b) => a - b);
+  const fighterCount = new Set(view?.assignments.map((row) => row.fighterId) ?? []).size;
+  const used = new Set(view?.assignments.map((row) => row.location) ?? []);
+  const columns = (["MAIN_RING", "FLOOR_1", "FLOOR_2"] as Location[]).filter(
+    (location) => locationsForFighterCount(fighterCount).includes(location) || used.has(location),
+  );
 
   return (
     <main className="print-sheet mx-auto max-w-3xl bg-white px-6 py-8 text-black">
@@ -36,16 +42,16 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
         <thead>
           <tr>
             <th className="border-b border-black py-2">Block</th>
-            <th className="border-b border-black py-2">Main ring</th>
-            <th className="border-b border-black py-2">Floor 1</th>
-            <th className="border-b border-black py-2">Floor 2</th>
+            {columns.map((location) => (
+              <th key={location} className="border-b border-black py-2">{locationLabel(location)}</th>
+            ))}
           </tr>
         </thead>
         <tbody>
           {blocks.map((block) => (
             <tr key={block}>
               <td className="border-b border-neutral-300 py-2">{block}</td>
-              {["MAIN_RING", "FLOOR_1", "FLOOR_2"].map((location) => {
+              {columns.map((location) => {
                 const match = view?.assignments.find((row) => row.blockIndex === block && row.location === location);
                 return (
                   <td key={location} className="border-b border-neutral-300 py-2">

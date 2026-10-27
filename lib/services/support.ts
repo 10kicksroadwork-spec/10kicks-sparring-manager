@@ -49,7 +49,7 @@ export async function openStore(requestId: string): Promise<{ repo: SparringRepo
     return { repo: getRepository() };
   } catch (error) {
     if (error instanceof StoreUnavailable) {
-      return fail(503, "SHEETS_NOT_CONFIGURED", "The gym spreadsheet is not connected yet. Reads and writes are unavailable.", requestId);
+      return fail(503, "STORE_NOT_CONFIGURED", "The gym database is not connected yet. Reads and writes are unavailable.", requestId);
     }
     throw error;
   }
@@ -88,7 +88,7 @@ export async function withWrite<T>(args: {
   const { repo } = opened;
   const lock = getLockManager();
   if (lock.mode === "unavailable") {
-    return fail(503, "REDIS_UNAVAILABLE", "Writes are paused because the lock service is not configured. Nothing was saved.", args.requestId);
+    return fail(503, "REDIS_UNAVAILABLE", "Writes are paused because the database lock is not configured. Nothing was saved.", args.requestId);
   }
   const existing = await auditByRequest(repo, args.requestId, args.sessionId || undefined);
   const replayed = existing ? replay<T>(existing) : null;
@@ -149,11 +149,14 @@ export async function withWrite<T>(args: {
     return { ok: true, data: result.data, revision: savedSession ? nextRevision : undefined, requestId: args.requestId };
   } catch (error) {
     if (error instanceof ServiceStop) return error.failure;
-    if (error instanceof Error && error.name === "SHEETS_BUSY") {
-      return fail(503, "SHEETS_BUSY", "Google Sheets is busy. Nothing was confirmed saved. Retry in a moment.", args.requestId);
+    if (error instanceof Error && error.name === "LOCK_UNAVAILABLE") {
+      return fail(503, "LOCK_UNAVAILABLE", "Writes are paused because the database lock is not configured. Nothing was saved.", args.requestId);
     }
-    if (error instanceof Error && (error.name === "SHEETS_FAILED" || error.name === "STORE_UNAVAILABLE")) {
-      return fail(503, "SHEETS_FAILED", "The spreadsheet did not confirm the save. Refresh and check the latest revision before trying again.", args.requestId);
+    if (error instanceof Error && error.name === "STORE_UNAVAILABLE") {
+      return fail(503, "STORE_NOT_CONFIGURED", "The gym database is not connected yet. Nothing was saved.", args.requestId);
+    }
+    if (error instanceof Error && error.name === "STORE_FAILED") {
+      return fail(503, "STORE_FAILED", "The database did not confirm the save. Refresh and try again.", args.requestId);
     }
     console.error("mutation failed", args.eventType);
     return fail(500, "SAVE_FAILED", "The save failed. Refresh and try again.", args.requestId);

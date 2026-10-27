@@ -1,8 +1,11 @@
 "use client";
 
 import { use, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
 import { api, locationLabel, newRequestId } from "@/components/common/client";
+import { rundownStarted } from "@/lib/domain/rundown";
+import { locationsForFighterCount, type Location } from "@/lib/domain/types";
 
 type Assignment = {
   assignmentId: string;
@@ -21,10 +24,11 @@ type View = {
   corrupt: string[];
 };
 
-const LOCATIONS = ["MAIN_RING", "FLOOR_1", "FLOOR_2"] as const;
+const ALL_LOCATIONS: Location[] = ["MAIN_RING", "FLOOR_1", "FLOOR_2"];
 
 export default function RundownPage({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = use(params);
+  const router = useRouter();
   const [view, setView] = useState<View | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -52,6 +56,10 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const revision = view?.session.revision ?? 0;
   const blocks = [...new Set(view?.assignments.map((row) => row.blockIndex) ?? [])].sort((a, b) => a - b);
   const maxBlock = blocks.at(-1) ?? 0;
+  const fighterCount = (view?.attendance ?? []).filter((person) => person.assignedRole === "FIGHTER" && person.availabilityStatus === "AVAILABLE").length;
+  const usedLocations = new Set(view?.assignments.map((row) => row.location) ?? []);
+  const columns = ALL_LOCATIONS.filter((location) => locationsForFighterCount(fighterCount).includes(location) || usedLocations.has(location));
+  const canDiscard = Boolean(view?.session.activeGenerationId) && !rundownStarted(view?.session.status ?? "", view?.assignments ?? []);
 
   async function act(path: string, body: Record<string, unknown>, method = "POST") {
     setBusy(true);
@@ -61,6 +69,22 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     if (!result.ok) setError(result.error.message);
     else setNotice("Saved.");
     await reload();
+  }
+
+  async function discard() {
+    setBusy(true);
+    setError("");
+    const result = await api<{ cleared: boolean }>(`/api/sessions/${sessionId}/unpublish`, {
+      method: "POST",
+      body: JSON.stringify({ requestId: newRequestId(), expectedRevision: revision }),
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error.message);
+      await reload();
+      return;
+    }
+    router.push(`/sessions/${sessionId}/attendance`);
   }
 
   async function regenerate() {
@@ -104,7 +128,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                 <button className="tap" type="button" disabled={busy} data-testid={`complete-block-${block}`} onClick={() => void act(`/api/sessions/${sessionId}/blocks/${block}/complete`, { confirmBothRounds: true })}>Mark block complete</button>
               </div>
               <div className="mt-3 grid gap-2">
-                {LOCATIONS.map((location) => {
+                {columns.map((location) => {
                   const match = rows.find((row) => row.location === location);
                   return (
                     <article key={location} className="rounded-xl border border-[var(--line)] p-3">
@@ -142,7 +166,8 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
         </ul>
       </section>
       <div className="mt-6 grid gap-2">
-        <button className="tap tap-gold h-14" type="button" disabled={busy} data-testid="regenerate" onClick={() => void regenerate()}>Regenerate unfinished</button>
+        {canDiscard ? <button className="tap tap-gold h-14" type="button" disabled={busy} data-testid="discard-rundown" onClick={() => void discard()}>Discard rundown and return to check-in</button> : null}
+        <button className="tap h-14" type="button" disabled={busy} data-testid="regenerate" onClick={() => void regenerate()}>Regenerate unfinished</button>
         <button className="tap h-12" type="button" disabled={busy} onClick={() => void act(`/api/sessions/${sessionId}/undo`, {})}>Undo last rundown</button>
         <a className="tap h-12" href={`/sessions/${sessionId}/attendance`}>Back to check-in</a>
       </div>

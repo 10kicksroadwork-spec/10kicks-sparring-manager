@@ -3,8 +3,9 @@ import { evaluatePair } from "./matchmaking";
 import { pairCompatibility, scoreSchedule } from "./scoring";
 import { validateSchedule } from "./validator";
 import {
-  LOCATIONS,
   countsAsHardSession,
+  locationsForFighterCount,
+  scheduledFighterCount,
   type Assignment,
   type ConflictDiagnostic,
   type Location,
@@ -100,7 +101,7 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
     diagnostics: [
       diagnostic(
         "SCHEDULE_INFEASIBLE",
-        `No complete schedule exists within ${maxH} blocks under the Saturday rules: 3 hard sessions, one resting block between hard sessions, three locations, and at most 2 volunteer sessions. Limits were not relaxed and nobody was dropped.`,
+        `No complete schedule exists within ${maxH} blocks under the Saturday rules: 3 hard sessions, one resting block between hard sessions, ${locationPhrase(input)}, and at most 2 volunteer sessions. Limits were not relaxed and nobody was dropped.`,
         { details: { maxBlockHorizon: maxH, lowerBound: lower } },
       ),
     ],
@@ -150,6 +151,35 @@ function prepare(input: ScheduleInput): Prep {
   if (input.fighters.length === 0) {
     diagnostics.push(
       diagnostic("EMPTY_FIGHTER_ATTENDANCE", "No fighters are checked in. Check fighters in before generating a rundown."),
+    );
+    return { diagnostics, demand: 0, needed: new Map(), eligibleIds: new Map(), fixedByFighter: new Map() };
+  }
+  const fighterIds = new Set(input.fighters.map((fighter) => fighter.athleteId));
+  const dualRole = input.volunteers.filter((volunteer) => fighterIds.has(volunteer.athleteId));
+  if (dualRole.length > 0) {
+    for (const person of dualRole) {
+      diagnostics.push(
+        diagnostic(
+          "ROLE_CONFLICT",
+          `${person.displayName} is checked in as a fighter and a volunteer. Pick one role. A person is not paired with themselves.`,
+          { fighterId: person.athleteId, volunteerId: person.athleteId },
+        ),
+      );
+    }
+    return { diagnostics, demand: 0, needed: new Map(), eligibleIds: new Map(), fixedByFighter: new Map() };
+  }
+  const openDemand = input.fighters.reduce((total, fighter) => {
+    const done = input.fixedAssignments.filter(
+      (assignment) => assignment.fighterId === fighter.athleteId && countsAsHardSession(assignment.status),
+    ).length;
+    return total + Math.max(input.requiredHardSessions - done, 0);
+  }, 0);
+  if (input.volunteers.length === 0 && openDemand > 0) {
+    diagnostics.push(
+      diagnostic(
+        "EMPTY_VOLUNTEER_ATTENDANCE",
+        "No volunteers are checked in. Check people in on the volunteer list before generating. Fighters are not matched with themselves.",
+      ),
     );
     return { diagnostics, demand: 0, needed: new Map(), eligibleIds: new Map(), fixedByFighter: new Map() };
   }
@@ -212,6 +242,7 @@ function prepare(input: ScheduleInput): Prep {
     const unavailable = new Set(input.unavailableIds ?? []);
     const blockedVolunteers = new Set(fixed.map((a) => a.volunteerId));
     const eligible = input.volunteers.filter((volunteer) => {
+      if (volunteer.athleteId === fighter.athleteId) return false;
       if (unavailable.has(volunteer.athleteId)) return false;
       if (blockedVolunteers.has(volunteer.athleteId)) return false;
       const used = volunteerLoad(input, volunteer.athleteId);
@@ -260,9 +291,14 @@ function volunteerLoad(input: ScheduleInput, volunteerId: string): number {
   return input.fixedAssignments.filter((a) => a.volunteerId === volunteerId).length;
 }
 
+function locationPhrase(input: ScheduleInput): string {
+  const count = locationsForFighterCount(scheduledFighterCount(input)).length;
+  return count < 3 ? "two locations (main ring and floor 1)" : "three locations";
+}
+
 function lowerBound(input: ScheduleInput, prep: Prep): number {
   const totalSessions = input.fighters.length * input.requiredHardSessions;
-  const capacityBound = Math.ceil(totalSessions / LOCATIONS.length);
+  const capacityBound = Math.ceil(totalSessions / locationsForFighterCount(scheduledFighterCount(input)).length);
   const spacingBound = 1 + (input.requiredHardSessions - 1) * (input.restGapBlocks + 1);
   const fixedMax = input.fixedAssignments.reduce((max, a) => Math.max(max, a.blockIndex), 0);
   const basic = Math.max(capacityBound, input.requiredHardSessions === 3 ? 5 : spacingBound);
@@ -288,6 +324,29 @@ function blockPatterns(horizon: number, count: number, restGap: number): number[
   };
   walk(1);
   return out;
+}
+
+function locationPlans(openBlocks: number[], pool: Location[], used: Set<Location>, allowRepeat: boolean): Location[][] {
+  if (!allowRepeat) {
+    const open = pool.filter((location) => !used.has(location));
+    if (open.length !== openBlocks.length) return [];
+    return permutations(open);
+  }
+  const plans: Location[][] = [];
+  const walk = (index: number, current: Location[]) => {
+    if (index === openBlocks.length) {
+      plans.push(current.slice());
+      return;
+    }
+    for (const location of pool) {
+      current.push(location);
+      walk(index + 1, current);
+      current.pop();
+    }
+  };
+  walk(0, []);
+  plans.sort((a, b) => new Set(b).size - new Set(a).size || a.join().localeCompare(b.join()));
+  return plans;
 }
 
 function permutations<T>(items: T[]): T[][] {
@@ -340,6 +399,7 @@ function searchHorizon(
       return a.localeCompare(b);
     });
 
+  const matCount = locationsForFighterCount(scheduledFighterCount(input)).length;
   const load = new Array<number>(horizon + 1).fill(0);
   const blockPeople = new Map<number, Set<string>>();
   const blockLocMask = new Array<number>(horizon + 1).fill(0);
@@ -361,7 +421,7 @@ function searchHorizon(
       (prep.fixedByFighter.get(fighterId) ?? []).map((a) => a.blockIndex),
     );
     for (const block of pattern) {
-      if (!fixedBlocks.has(block) && load[block] >= LOCATIONS.length) return false;
+      if (!fixedBlocks.has(block) && load[block] >= matCount) return false;
     }
     for (const block of pattern) {
       if (!fixedBlocks.has(block)) {
@@ -452,8 +512,15 @@ function assignLocations(
     const fixedLoc = new Map<number, Location>(fixed.map((a) => [a.blockIndex, a.location]));
     const openBlocks = pattern.filter((block) => !fixedLoc.has(block));
     const used = new Set(fixedLoc.values());
-    const openLocs = LOCATIONS.filter((location) => !used.has(location));
-    if (openBlocks.length !== openLocs.length) return undefined;
+    if (openBlocks.length === 0) {
+      placed.set(fighter.athleteId, new Map(fixedLoc));
+      const done = walk(index + 1);
+      placed.delete(fighter.athleteId);
+      return done;
+    }
+    const pool = locationsForFighterCount(scheduledFighterCount(input));
+    const plans = locationPlans(openBlocks, pool, used, pool.length < input.requiredHardSessions);
+    if (plans.length === 0) return undefined;
 
     const applyFresh = (fresh: Array<[number, Location]>, mapping: Map<number, Location>): boolean => {
       for (const [block, location] of fresh) {
@@ -468,18 +535,11 @@ function assignLocations(
       placed.delete(fighter.athleteId);
     };
 
-    if (openBlocks.length === 0) {
-      placed.set(fighter.athleteId, new Map(fixedLoc));
-      const done = walk(index + 1);
-      placed.delete(fighter.athleteId);
-      return done;
-    }
-
-    for (const perm of permutations(openLocs)) {
+    for (const plan of plans) {
       const mapping = new Map(fixedLoc);
       const fresh: Array<[number, Location]> = [];
       openBlocks.forEach((block, i) => {
-        const location = perm[i];
+        const location = plan[i];
         mapping.set(block, location);
         fresh.push([block, location]);
       });
@@ -549,6 +609,7 @@ function assignVolunteers(
     if (!fighter) return [];
     const ids: { id: string; score: number }[] = [];
     for (const volunteer of input.volunteers) {
+      if (volunteer.athleteId === slot.fighterId) continue;
       if (unavailable.has(volunteer.athleteId)) continue;
       if ((volCount.get(volunteer.athleteId) ?? 0) >= input.maxVolunteerSessions) continue;
       if (volFighters.get(volunteer.athleteId)?.has(slot.fighterId)) continue;
@@ -602,6 +663,7 @@ function assignVolunteers(
       if (!fighter) return false;
       let available = 0;
       for (const volunteer of input.volunteers) {
+        if (volunteer.athleteId === fighterId) continue;
         if (unavailable.has(volunteer.athleteId)) continue;
         if (volFighters.get(volunteer.athleteId)?.has(fighterId)) continue;
         if ((volCount.get(volunteer.athleteId) ?? 0) >= input.maxVolunteerSessions) continue;

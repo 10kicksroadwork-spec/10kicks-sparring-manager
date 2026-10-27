@@ -21,6 +21,9 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
     if (code === "EMPTY_FIGHTER_ATTENDANCE") {
       steps.add("Check in the fighters who are actually here before generating.");
     }
+    if (code === "EMPTY_VOLUNTEER_ATTENDANCE" || code === "ROLE_CONFLICT") {
+      steps.add("Check people in on the volunteer list. One person takes one role this Saturday and is not paired with themselves.");
+    }
     if (code === "FIXED_ASSIGNMENT_CONFLICT" || code === "REST_SPACING_CONFLICT" || code === "LOCATION_COVERAGE_CONFLICT") {
       steps.add("Unlock or resolve the completed match that conflicts, then generate again. Completed work stays put.");
     }

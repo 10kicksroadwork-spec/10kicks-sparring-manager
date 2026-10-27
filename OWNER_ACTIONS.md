@@ -14,9 +14,9 @@ The cloud GitHub login cannot create repositories. In the gym account `10kicksro
 
 Do not send a personal access token in chat. Add it through the approved secret UI if a token is required.
 
-## 3. Gym spreadsheet and Google Cloud
+## 3. Add people
 
-In the gym Google account, create an empty spreadsheet named `10 Kicks — Sparring Manager Database`. In a Google Cloud project, enable the Google Sheets API and create a service account with no extra project roles. Share the spreadsheet with that service account as Editor. Put the spreadsheet id and the JSON key in Vercel secret env vars, not in chat and not in git.
+Use the Supabase Table Editor for the `athletes` table, or the roster page in the app. A directory row can omit weight or skill. Hard sparring needs weight and skill 1–7. Aggression is not required and is not a match limit. Role is `FIGHTER`, `VOLUNTEER`, or `BOTH`. Leave `active` true only for people in the current camp. Do not paste the service role key into chat. Google Sheets is no longer the store.
 
 Also create an OAuth Web client with scopes openid, email, and profile. Redirects:
 
@@ -33,4 +33,4 @@ After Vercel access, attach the free Marketplace Redis if it does not ask for a 
 
 ## 6. Coach review of the numbers
 
-15 lb and 10%, skill gap 1, and aggression gap 1 are proposed defaults. A coach should accept or change them in Session limits. The app will keep the “not safety-certified” label.
+15 lb and 10%, and skill gap 1, are proposed defaults. A coach should accept or change them in Session limits. The app will keep the “not safety-certified” label. Aggression is not used.

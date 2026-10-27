@@ -3,24 +3,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { Shell } from "@/components/common/Shell";
 import { api, newRequestId } from "@/components/common/client";
+import { isReadyForHardMatch } from "@/lib/domain/profile";
 
 type Athlete = {
   athleteId: string;
   displayName: string;
-  weightLbs: number;
-  skill: number;
-  aggression: number;
+  weightLbs: number | null;
+  skill: number | null;
+  aggression: number | null;
   roleEligibility: "FIGHTER" | "VOLUNTEER" | "BOTH";
   active: boolean;
   coachNotes: string;
 };
+
+function ratingLine(athlete: Athlete): string {
+  const weight = athlete.weightLbs === null ? "weight missing" : `${athlete.weightLbs} lb`;
+  const skill = athlete.skill === null ? "skill missing" : `skill ${athlete.skill}`;
+  return `${weight} · ${skill}`;
+}
 
 export default function AthletesPage() {
   const [athletes, setAthletes] = useState<Athlete[]>([]);
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [form, setForm] = useState({ displayName: "", weightLbs: "", skill: "3", aggression: "3", roleEligibility: "BOTH", coachNotes: "" });
+  const [form, setForm] = useState({ displayName: "", weightLbs: "", skill: "3", roleEligibility: "BOTH", coachNotes: "" });
 
   async function reload() {
     const result = await api<{ athletes: Athlete[]; corrupt: string[] }>("/api/athletes");
@@ -62,7 +69,6 @@ export default function AthletesPage() {
         displayName: form.displayName,
         weightLbs: Number(form.weightLbs),
         skill: Number(form.skill),
-        aggression: Number(form.aggression),
         roleEligibility: form.roleEligibility,
         coachNotes: form.coachNotes,
       }),
@@ -78,7 +84,7 @@ export default function AthletesPage() {
   return (
     <Shell>
       <h1 className="font-display text-5xl leading-none">Roster</h1>
-      <p className="mt-2 text-[var(--muted)]">Names are labels. Weight, skill, and aggression are the match inputs. Skip medical notes.</p>
+      <p className="mt-2 text-[var(--muted)]">Names are labels. Weight and skill (1–7) are the match inputs. People missing either stay in the directory and cannot be checked into a hard session. Skip medical notes.</p>
       <label className="mt-4 block">
         <span className="sr-only">Search athletes</span>
         <input className="field" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" aria-label="Search athletes" />
@@ -92,7 +98,8 @@ export default function AthletesPage() {
               <h2 className="text-xl font-semibold">{athlete.displayName}</h2>
               <span className="text-sm text-[var(--muted)]">{athlete.active ? athlete.roleEligibility : "Inactive"}</span>
             </div>
-            <p className="mt-1 text-[var(--muted)]">{athlete.weightLbs} lb · skill {athlete.skill} · aggression {athlete.aggression}</p>
+            <p className="mt-1 text-[var(--muted)]">{ratingLine(athlete)}</p>
+            {isReadyForHardMatch(athlete) ? null : <p className="mt-1 text-sm">Not ready for hard sparring until weight and skill are filled in.</p>}
             {athlete.coachNotes ? <p className="mt-1 text-sm">{athlete.coachNotes}</p> : null}
           </li>
         ))}
@@ -101,14 +108,9 @@ export default function AthletesPage() {
         <h2 className="font-display text-3xl">Add athlete</h2>
         <input className="field" required aria-label="Name" placeholder="Name" value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} />
         <input className="field" required inputMode="decimal" aria-label="Weight in pounds" placeholder="Weight (lb)" value={form.weightLbs} onChange={(event) => setForm({ ...form, weightLbs: event.target.value })} />
-        <div className="grid grid-cols-2 gap-2">
-          <label>Skill
-            <input className="field" aria-label="Skill" inputMode="numeric" value={form.skill} onChange={(event) => setForm({ ...form, skill: event.target.value })} />
-          </label>
-          <label>Aggression
-            <input className="field" aria-label="Aggression" inputMode="numeric" value={form.aggression} onChange={(event) => setForm({ ...form, aggression: event.target.value })} />
-          </label>
-        </div>
+        <label>Skill
+          <input className="field" aria-label="Skill" inputMode="numeric" min={1} max={7} value={form.skill} onChange={(event) => setForm({ ...form, skill: event.target.value })} />
+        </label>
         <label>Role
           <select className="field" aria-label="Role eligibility" value={form.roleEligibility} onChange={(event) => setForm({ ...form, roleEligibility: event.target.value })}>
             <option value="BOTH">Fighter or volunteer</option>

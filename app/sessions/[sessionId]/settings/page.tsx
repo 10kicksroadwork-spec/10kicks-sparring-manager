@@ -45,7 +45,7 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
     <Shell>
       <h1 className="font-display text-5xl leading-none">Saturday limits</h1>
       <p className="banner mt-4">{notice || PROPOSED_LIMITS_NOTICE}</p>
-      <p className="mt-3 text-sm text-[var(--muted)]">All four numbers apply together. A close score never overrides a limit. Named exclusions cannot be waived here.</p>
+      <p className="mt-3 text-sm text-[var(--muted)]">Weight and skill limits apply together. A close score never overrides a limit. Named exclusions cannot be waived here. Aggression is not used.</p>
       {error ? <p className="banner mt-3" role="alert">{error}</p> : null}
       {limits ? (
         <form className="mt-4 grid gap-3" onSubmit={(event) => void save(event)}>
@@ -57,9 +57,6 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
           </label>
           <label>Max skill gap
             <input className="field" aria-label="Max skill gap" inputMode="numeric" value={limits.maxSkillDifference} onChange={(event) => setLimits({ ...limits, maxSkillDifference: Number(event.target.value) })} />
-          </label>
-          <label>Max aggression gap
-            <input className="field" aria-label="Max aggression gap" inputMode="numeric" value={limits.maxAggressionDifference} onChange={(event) => setLimits({ ...limits, maxAggressionDifference: Number(event.target.value) })} />
           </label>
           <label className="flex min-h-11 items-center gap-3">
             <input type="checkbox" checked={confirm} onChange={(event) => setConfirm(event.target.checked)} />

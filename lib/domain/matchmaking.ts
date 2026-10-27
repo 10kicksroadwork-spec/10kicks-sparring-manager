@@ -4,7 +4,6 @@ export type PairReasonCode =
   | "WEIGHT_LBS"
   | "WEIGHT_PCT"
   | "SKILL"
-  | "AGGRESSION"
   | "EXPLICIT_EXCLUSION"
   | "INVALID_OVERRIDE"
   | "NUMERIC_EXCEPTION_APPLIED";
@@ -54,8 +53,8 @@ export function weightGap(a: SessionAthlete, b: SessionAthlete): { abs: number; 
 
 /**
  * Decide whether a fighter/volunteer pair may hard spar.
- * Absolute weight, relative weight, skill, and aggression must all pass.
- * A complete one-session override may waive numeric limits only.
+ * Absolute weight, relative weight, and skill must all pass.
+ * Aggression is not a limit. A complete one-session override may waive numeric limits only.
  * An active named exclusion always loses.
  */
 export function evaluatePair(args: {
@@ -83,7 +82,6 @@ export function evaluatePair(args: {
   const weightLbsOk = gap.abs <= limits.maxWeightDifferenceLbs + 1e-9;
   const weightPctOk = gap.pctOfLighter <= limits.maxWeightDifferencePctOfLighterAthlete + 1e-9;
   const skillOk = Math.abs(fighter.skill - volunteer.skill) <= limits.maxSkillDifference;
-  const aggressionOk = Math.abs(fighter.aggression - volunteer.aggression) <= limits.maxAggressionDifference;
 
   if (!weightLbsOk) {
     reasonCodes.push("WEIGHT_LBS");
@@ -101,12 +99,6 @@ export function evaluatePair(args: {
     reasonCodes.push("SKILL");
     reasons.push(
       `Skill gap is ${Math.abs(fighter.skill - volunteer.skill)}, above the maximum of ${limits.maxSkillDifference}.`,
-    );
-  }
-  if (!aggressionOk) {
-    reasonCodes.push("AGGRESSION");
-    reasons.push(
-      `Aggression gap is ${Math.abs(fighter.aggression - volunteer.aggression)}, above the maximum of ${limits.maxAggressionDifference}.`,
     );
   }
 

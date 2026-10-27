@@ -1,3 +1,4 @@
+import { AGGRESSION_MAX, AGGRESSION_MIN, SKILL_MAX, SKILL_MIN } from "@/lib/domain/profile";
 import { saturdayPresetSettings, type SaturdaySettings } from "@/lib/domain/types";
 import type {
   Athlete,
@@ -45,6 +46,13 @@ function num(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function optionalStat(raw: string): { value: number | null } | { invalid: true } {
+  if (raw === "") return { value: null };
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return { invalid: true };
+  return { value: parsed };
+}
+
 export function parseSettings(raw: string): { settings: SaturdaySettings } | { error: string } {
   try {
     const value = JSON.parse(raw) as Partial<SaturdaySettings>;
@@ -72,13 +80,22 @@ export function parseSettings(raw: string): { settings: SaturdaySettings } | { e
 export function parseAthleteRow(row: unknown[]): { athlete: Athlete } | { error: string } | { skip: true } {
   const cells = record(TAB_HEADERS.Athletes, row);
   if (!cells) return { skip: true };
-  const weight = num(cells.weight_lbs);
-  const skill = num(cells.skill);
-  const aggression = num(cells.aggression);
+  const weight = optionalStat(cells.weight_lbs);
+  const skill = optionalStat(cells.skill);
+  const aggression = optionalStat(cells.aggression);
   const active = bool(cells.active);
   const role = cells.role_eligibility;
-  if (!cells.athlete_id || !cells.display_name || weight === null || skill === null || aggression === null || active === null) {
+  if (!cells.athlete_id || !cells.display_name || active === null || "invalid" in weight || "invalid" in skill || "invalid" in aggression) {
     return { error: `Athletes row ${cells.athlete_id || "(missing id)"} is incomplete or corrupt` };
+  }
+  if (weight.value !== null && (!(weight.value > 0) || weight.value > 500)) {
+    return { error: `Athletes row ${cells.athlete_id} has an invalid weight` };
+  }
+  if (skill.value !== null && (!Number.isInteger(skill.value) || skill.value < SKILL_MIN || skill.value > SKILL_MAX)) {
+    return { error: `Athletes row ${cells.athlete_id} has an invalid skill` };
+  }
+  if (aggression.value !== null && (!Number.isInteger(aggression.value) || aggression.value < AGGRESSION_MIN || aggression.value > AGGRESSION_MAX)) {
+    return { error: `Athletes row ${cells.athlete_id} has an invalid aggression` };
   }
   if (role !== "FIGHTER" && role !== "VOLUNTEER" && role !== "BOTH") {
     return { error: `Athletes row ${cells.athlete_id} has an invalid role` };
@@ -87,9 +104,9 @@ export function parseAthleteRow(row: unknown[]): { athlete: Athlete } | { error:
     athlete: {
       athleteId: cells.athlete_id,
       displayName: cells.display_name,
-      weightLbs: weight,
-      skill,
-      aggression,
+      weightLbs: weight.value,
+      skill: skill.value,
+      aggression: aggression.value,
       roleEligibility: role,
       active,
       coachNotes: cells.coach_notes,
@@ -103,9 +120,9 @@ export function athleteToRow(athlete: Athlete): (string | number | boolean)[] {
   return [
     athlete.athleteId,
     athlete.displayName,
-    athlete.weightLbs,
-    athlete.skill,
-    athlete.aggression,
+    athlete.weightLbs ?? "",
+    athlete.skill ?? "",
+    athlete.aggression ?? "",
     athlete.roleEligibility,
     athlete.active,
     athlete.coachNotes,
@@ -168,8 +185,8 @@ export function parseAttendanceRow(row: unknown[]): { attendance: Attendance } |
   const present = bool(cells.present);
   const weight = num(cells.weight_lbs_snapshot);
   const skill = num(cells.skill_snapshot);
-  const aggression = num(cells.aggression_snapshot);
-  if (!cells.attendance_id || !cells.session_id || !cells.athlete_id || present === null || weight === null || skill === null || aggression === null) {
+  const aggression = optionalStat(cells.aggression_snapshot);
+  if (!cells.attendance_id || !cells.session_id || !cells.athlete_id || present === null || weight === null || skill === null || "invalid" in aggression) {
     return { error: `Attendance row ${cells.attendance_id || "(missing id)"} is corrupt` };
   }
   if (cells.assigned_role !== "FIGHTER" && cells.assigned_role !== "VOLUNTEER") {
@@ -188,7 +205,7 @@ export function parseAttendanceRow(row: unknown[]): { attendance: Attendance } |
       availabilityStatus: cells.availability_status as Attendance["availabilityStatus"],
       weightLbsSnapshot: weight,
       skillSnapshot: skill,
-      aggressionSnapshot: aggression,
+      aggressionSnapshot: aggression.value,
       checkedInAt: cells.checked_in_at,
       updatedAt: cells.updated_at,
     },
@@ -205,7 +222,7 @@ export function attendanceToRow(row: Attendance): (string | number | boolean)[] 
     row.availabilityStatus,
     row.weightLbsSnapshot,
     row.skillSnapshot,
-    row.aggressionSnapshot,
+    row.aggressionSnapshot ?? "",
     row.checkedInAt,
     row.updatedAt,
   ];

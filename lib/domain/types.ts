@@ -3,6 +3,16 @@
 export const LOCATIONS = ["MAIN_RING", "FLOOR_1", "FLOOR_2"] as const;
 export type Location = (typeof LOCATIONS)[number];
 
+/** Five or more fighters use the main ring and both floors. Fewer than five use the main ring and floor 1 only. */
+export function locationsForFighterCount(fighterCount: number): Location[] {
+  return fighterCount < 5 ? ["MAIN_RING", "FLOOR_1"] : [...LOCATIONS];
+}
+
+export function scheduledFighterCount(input: { fighters: { athleteId: string }[]; unavailableIds?: string[] }): number {
+  const unavailable = new Set(input.unavailableIds ?? []);
+  return input.fighters.filter((fighter) => !unavailable.has(fighter.athleteId)).length;
+}
+
 export const ASSIGNMENT_STATUSES = ["PLANNED", "IN_PROGRESS", "COMPLETED", "INTERRUPTED"] as const;
 export type AssignmentStatus = (typeof ASSIGNMENT_STATUSES)[number];
 
@@ -27,12 +37,13 @@ export type SessionAthlete = {
   displayName: string;
   weightLbs: number;
   skill: number;
-  aggression: number;
+  /** Stored when a row has it. Matching and check-in ignore it. */
+  aggression: number | null;
 };
 
 /**
- * Proposed coach-review defaults. All four numeric limits apply together (logical AND).
- * They are not a safety certification.
+ * Proposed coach-review defaults. Absolute weight, relative weight, and skill apply together.
+ * maxAggressionDifference remains so older session settings still load. It is not applied.
  */
 export const PROPOSED_MATCH_LIMITS = {
   maxWeightDifferenceLbs: 15,
@@ -42,7 +53,7 @@ export const PROPOSED_MATCH_LIMITS = {
 } as const;
 
 export const PROPOSED_LIMITS_NOTICE =
-  "Proposed defaults pending coach safety review: 15 lb AND 10% of the lighter athlete, skill gap 1, and aggression gap 1. These limits are not safety-certified. The coach decides suitability, injury readiness, conduct, and intensity.";
+  "Proposed defaults pending coach safety review: 15 lb AND 10% of the lighter athlete, and skill gap 1. These limits are not safety-certified. The coach decides suitability, injury readiness, conduct, and intensity.";
 
 export type MatchingLimits = {
   maxWeightDifferenceLbs: number;
@@ -59,8 +70,8 @@ export type ScoringWeights = {
 
 export const DEFAULT_SCORING_WEIGHTS: ScoringWeights = {
   weight: 0.4,
-  skill: 0.3,
-  aggression: 0.3,
+  skill: 0.6,
+  aggression: 0,
 };
 
 export type Restriction = {
@@ -121,6 +132,7 @@ export type ConflictCode =
   | "NUMERIC_LIMIT"
   | "INVALID_OVERRIDE"
   | "EMPTY_FIGHTER_ATTENDANCE"
+  | "EMPTY_VOLUNTEER_ATTENDANCE"
   | "INCOMPLETE_PROFILE"
   | "ROLE_CONFLICT"
   | "SEARCH_BUDGET_EXHAUSTED"

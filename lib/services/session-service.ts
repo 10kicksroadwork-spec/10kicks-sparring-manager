@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isReadyForHardMatch } from "@/lib/domain/profile";
 import { saturdayPresetSettings, PROPOSED_LIMITS_NOTICE, type MatchingLimits } from "@/lib/domain/types";
 import { can } from "@/lib/permissions";
 import { appTimezone } from "@/lib/env";
@@ -38,7 +39,6 @@ export async function createSession(actor: Actor, input: { dateLocal?: string; r
     updatedBy: actor.email,
     updatedAt: now,
   };
-  const saved = { ...session, revision: 1 };
   return withWrite({
     actor,
     action: "runSession",
@@ -46,11 +46,81 @@ export async function createSession(actor: Actor, input: { dateLocal?: string; r
     expectedRevision: null,
     requestId: input.requestId,
     eventType: "session.create",
-    run: async () => ({
-      data: { session: saved },
-      session,
-      auditSessionId: session.sessionId,
-    }),
+    run: async ({ repo, now }) => {
+      const roster = await repo.readAthletes();
+      const attendance = campAttendance(roster.rows, session.sessionId, now, []);
+      const next = attendance.length > 0 ? { ...session, status: "READY" as const } : session;
+      return {
+        data: { session: { ...next, revision: 1 } },
+        session: next,
+        batch: { attendance },
+        auditSessionId: session.sessionId,
+      };
+    },
+  });
+}
+
+function campAttendance(athletes: Athlete[], sessionId: string, now: string, existing: Attendance[]): Attendance[] {
+  const seen = new Set(existing.map((row) => row.athleteId));
+  const writes: Attendance[] = [];
+  for (const athlete of athletes) {
+    if (seen.has(athlete.athleteId)) continue;
+    if (!athlete.active || athlete.roleEligibility === "VOLUNTEER" || !isReadyForHardMatch(athlete)) continue;
+    if (athlete.weightLbs === null || athlete.skill === null) continue;
+    writes.push({
+      attendanceId: randomUUID(),
+      sessionId,
+      athleteId: athlete.athleteId,
+      assignedRole: "FIGHTER",
+      present: true,
+      availabilityStatus: "AVAILABLE",
+      weightLbsSnapshot: athlete.weightLbs,
+      skillSnapshot: athlete.skill,
+      aggressionSnapshot: athlete.aggression,
+      checkedInAt: now,
+      updatedAt: now,
+    });
+  }
+  return writes;
+}
+
+export async function ensureCampFighters(
+  actor: Actor,
+  sessionId: string,
+  body: { requestId: string; expectedRevision: number },
+): Promise<ServiceResult<{ seeded: number }>> {
+  if (!can(actor.role, "runSession")) return fail(403, "FORBIDDEN", "Your account cannot do that.", body.requestId);
+  const opened = await openStore(body.requestId);
+  if ("ok" in opened) return opened;
+  const view = await loadSession(opened.repo, sessionId);
+  if (!view) return fail(404, "NOT_FOUND", "That session does not exist.", body.requestId);
+  if (view.session.revision !== body.expectedRevision) {
+    return fail(409, "STALE_REVISION", "Another coach updated this session. Refresh the rundown.", body.requestId);
+  }
+  const athletes = await opened.repo.readAthletes();
+  const preview = campAttendance(athletes.rows, sessionId, nowIso(), view.attendance);
+  if (preview.length === 0) return { ok: true, data: { seeded: 0 }, revision: view.session.revision, requestId: body.requestId };
+  return withWrite({
+    actor,
+    action: "runSession",
+    sessionId,
+    expectedRevision: body.expectedRevision,
+    requestId: body.requestId,
+    eventType: "attendance.camp",
+    run: async ({ repo, session, now }) => {
+      if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      const fresh = await loadSession(repo, sessionId);
+      const roster = await repo.readAthletes();
+      const rows = campAttendance(roster.rows, sessionId, now, fresh?.attendance ?? []);
+      if (rows.length === 0) {
+        throw new ServiceStop(fail(409, "STALE_REVISION", "Check-in was already updated. Refresh.", body.requestId));
+      }
+      return {
+        data: { seeded: rows.length },
+        session: { ...session, status: session.status === "DRAFT" ? "READY" : session.status },
+        batch: { attendance: rows },
+      };
+    },
   });
 }
 
@@ -91,8 +161,8 @@ export async function putAttendance(
     availabilityStatus?: Attendance["availabilityStatus"];
     weightLbs?: number;
     skill?: number;
-    aggression?: number;
-    createVolunteer?: { displayName: string; weightLbs: number; skill: number; aggression: number; roleEligibility: Athlete["roleEligibility"]; coachNotes?: string };
+    aggression?: number | null;
+    createVolunteer?: { displayName: string; weightLbs: number; skill: number; aggression?: number | null; roleEligibility: Athlete["roleEligibility"]; coachNotes?: string };
   },
 ): Promise<ServiceResult<{ attendance: Attendance; athlete?: Athlete }>> {
   return withWrite({
@@ -115,7 +185,7 @@ export async function putAttendance(
           displayName: body.createVolunteer.displayName.trim(),
           weightLbs: body.createVolunteer.weightLbs,
           skill: body.createVolunteer.skill,
-          aggression: body.createVolunteer.aggression,
+          aggression: body.createVolunteer.aggression ?? null,
           roleEligibility: "VOLUNTEER",
           active: true,
           coachNotes: body.createVolunteer.coachNotes?.trim() ?? "",
@@ -126,24 +196,50 @@ export async function putAttendance(
       }
       if (!athleteId) throw new ServiceStop(fail(400, "BAD_REQUEST", "Choose an athlete or add a volunteer.", body.requestId));
       const athlete = created ?? (await repo.readAthletes()).rows.find((row) => row.athleteId === athleteId);
-      if (!athlete || !athlete.active) {
-        throw new ServiceStop(fail(400, "INACTIVE_ATHLETE", "That person is not an active athlete. Add them before check-in.", body.requestId));
+      if (!athlete) {
+        throw new ServiceStop(fail(400, "INACTIVE_ATHLETE", "That person is not on the roster.", body.requestId));
       }
       const assignedRole = body.assignedRole ?? (created ? "VOLUNTEER" : athlete.roleEligibility === "VOLUNTEER" ? "VOLUNTEER" : "FIGHTER");
       if (!roleAllowed(athlete, assignedRole)) {
         throw new ServiceStop(fail(400, "ROLE_NOT_ALLOWED", `${athlete.displayName} is not eligible for the ${assignedRole.toLowerCase()} role.`, body.requestId));
       }
       const existing = (await repo.readAttendance(sessionId)).rows.find((row) => row.athleteId === athleteId);
+      const weightLbsSnapshot = body.weightLbs ?? existing?.weightLbsSnapshot ?? athlete.weightLbs;
+      const skillSnapshot = body.skill ?? existing?.skillSnapshot ?? athlete.skill;
+      const aggressionSnapshot = body.aggression !== undefined ? body.aggression : (existing?.aggressionSnapshot ?? athlete.aggression);
+      const present = body.present ?? true;
+      const availabilityStatus = body.availabilityStatus ?? existing?.availabilityStatus ?? "AVAILABLE";
+      const checkingIn = present && availabilityStatus === "AVAILABLE";
+      if (checkingIn && !isReadyForHardMatch({ weightLbs: weightLbsSnapshot, skill: skillSnapshot })) {
+        throw new ServiceStop(
+          fail(
+            400,
+            "INCOMPLETE_PROFILE",
+            `${athlete.displayName} needs weight and skill (1–7) before a hard session.`,
+            body.requestId,
+          ),
+        );
+      }
+      if (weightLbsSnapshot === null || skillSnapshot === null) {
+        throw new ServiceStop(
+          fail(
+            400,
+            "INCOMPLETE_PROFILE",
+            `${athlete.displayName} needs weight and skill (1–7) before a hard session.`,
+            body.requestId,
+          ),
+        );
+      }
       const attendance: Attendance = {
         attendanceId: existing?.attendanceId ?? randomUUID(),
         sessionId,
         athleteId,
         assignedRole,
-        present: body.present ?? true,
-        availabilityStatus: body.availabilityStatus ?? existing?.availabilityStatus ?? "AVAILABLE",
-        weightLbsSnapshot: body.weightLbs ?? existing?.weightLbsSnapshot ?? athlete.weightLbs,
-        skillSnapshot: body.skill ?? existing?.skillSnapshot ?? athlete.skill,
-        aggressionSnapshot: body.aggression ?? existing?.aggressionSnapshot ?? athlete.aggression,
+        present,
+        availabilityStatus,
+        weightLbsSnapshot,
+        skillSnapshot,
+        aggressionSnapshot,
         checkedInAt: existing?.checkedInAt ?? now,
         updatedAt: now,
       };

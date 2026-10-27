@@ -12,11 +12,9 @@ export function pairCompatibility(
   const wDen = Math.max(limits.maxWeightDifferenceLbs, 1e-6);
   const pDen = Math.max(limits.maxWeightDifferencePctOfLighterAthlete, 1e-6);
   const sDen = Math.max(limits.maxSkillDifference, 1);
-  const aDen = Math.max(limits.maxAggressionDifference, 1);
   const weightNorm = (gap.abs / wDen + gap.pctOfLighter / pDen) / 2;
   const skillNorm = Math.abs(fighter.skill - volunteer.skill) / sDen;
-  const aggressionNorm = Math.abs(fighter.aggression - volunteer.aggression) / aDen;
-  const penalty = weights.weight * weightNorm + weights.skill * skillNorm + weights.aggression * aggressionNorm;
+  const penalty = weights.weight * weightNorm + weights.skill * skillNorm;
   return 1 - penalty;
 }
 
