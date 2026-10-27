@@ -1,4 +1,5 @@
 import { diagnostic } from "./diagnostics";
+import { sortPlansByLeftPack } from "./location-packing";
 import { evaluatePair } from "./matchmaking";
 import { pairCompatibility, scoreSchedule } from "./scoring";
 import { validateSchedule } from "./validator";
@@ -210,7 +211,6 @@ function prepare(input: ScheduleInput): Prep {
       "EXPLICIT_EXCLUSION",
       "VOLUNTEER_MAX_EXCEEDED",
       "LOCATION_COVERAGE_CONFLICT",
-      "MAIN_RING_REQUIRED",
       "DUPLICATE_PAIRING",
       "VOLUNTEER_SAME_FIGHTER",
       "SESSION_COUNT",
@@ -314,53 +314,7 @@ function lowerBound(input: ScheduleInput, prep: Prep): number {
   const spacingBound = 1 + (input.requiredHardSessions - 1) * (input.restGapBlocks + 1);
   const fixedMax = input.fixedAssignments.reduce((max, a) => Math.max(max, a.blockIndex), 0);
   const basic = Math.max(capacityBound, input.requiredHardSessions === 3 ? 5 : spacingBound);
-  let bound = Math.max(basic, spacingBound, fixedMax, prep.demand > 0 ? 1 : 0);
-  // Main ring in every occupied block + one Main ring per fighter (no location repeat)
-  // means occupied blocks ≤ fighter count. Raise the horizon until that cover exists.
-  if (mats >= input.requiredHardSessions && input.fighters.length > 0) {
-    const maxH = Math.max(bound, input.maxBlockHorizon);
-    for (let horizon = bound; horizon <= maxH; horizon += 1) {
-      if (patternCoverFitsMainRing(horizon, input.fighters.length, mats, input.requiredHardSessions, input.restGapBlocks)) {
-        bound = Math.max(bound, horizon);
-        break;
-      }
-    }
-  }
-  return bound;
-}
-
-/** True when some fighter block-pattern cover has load ≤ mats and occupied blocks ≤ fighters. */
-function patternCoverFitsMainRing(
-  horizon: number,
-  fighterCount: number,
-  mats: number,
-  sessions: number,
-  restGap: number,
-): boolean {
-  const patterns = blockPatterns(horizon, sessions, restGap);
-  if (patterns.length === 0) return false;
-  const load = new Array<number>(horizon + 1).fill(0);
-  let found = false;
-  const walk = (index: number) => {
-    if (found) return;
-    if (index === fighterCount) {
-      let occupied = 0;
-      for (let block = 1; block <= horizon; block += 1) {
-        if (load[block] > 0) occupied += 1;
-      }
-      if (occupied <= fighterCount) found = true;
-      return;
-    }
-    for (const pattern of patterns) {
-      if (pattern.some((block) => load[block] >= mats)) continue;
-      for (const block of pattern) load[block] += 1;
-      walk(index + 1);
-      for (const block of pattern) load[block] -= 1;
-      if (found) return;
-    }
-  };
-  walk(0);
-  return found;
+  return Math.max(basic, spacingBound, fixedMax, prep.demand > 0 ? 1 : 0);
 }
 
 function blockPatterns(horizon: number, count: number, restGap: number): number[][] {
@@ -384,28 +338,10 @@ function blockPatterns(horizon: number, count: number, restGap: number): number[
   return out;
 }
 
-/** Every occupied block must use Main ring — never leave it Open while mats have matches. */
-function everyOccupiedBlockUsesMainRing(placed: Map<string, Map<number, Location>>): boolean {
-  const byBlock = new Map<number, Set<Location>>();
-  for (const mapping of placed.values()) {
-    for (const [block, location] of mapping) {
-      let set = byBlock.get(block);
-      if (!set) {
-        set = new Set();
-        byBlock.set(block, set);
-      }
-      set.add(location);
-    }
-  }
-  for (const locations of byBlock.values()) {
-    if (locations.size > 0 && !locations.has("MAIN_RING")) return false;
-  }
-  return true;
-}
-
 /**
- * Location plans for one block's open fighters. Always packs Main ring first when the
- * block does not already have it from a locked/completed match.
+ * Location plans for one block's open fighters. Prefers left packing
+ * (Main ring → Back Mat → Front Mat) without rejecting shorter cards that
+ * must leave Main open in some blocks under location uniqueness.
  */
 function blockLocationPlans(
   fighters: string[],
@@ -413,25 +349,17 @@ function blockLocationPlans(
   usedLoc: Map<string, Set<Location>>,
   blockMask: number,
   allowRepeat: boolean,
-  requireMainRing: boolean,
 ): Location[][] {
   if (fighters.length === 0) return [[]];
   const plans: Location[][] = [];
   const walk = (index: number, current: Location[], mask: number) => {
     if (index === fighters.length) {
-      const hasMain = (mask & LOCATION_BIT.MAIN_RING) !== 0 || (blockMask & LOCATION_BIT.MAIN_RING) !== 0;
-      if (requireMainRing && !hasMain) return;
       plans.push(current.slice());
       return;
     }
     const fighterId = fighters[index];
     const used = usedLoc.get(fighterId) ?? new Set();
-    const needMain =
-      requireMainRing && (mask & LOCATION_BIT.MAIN_RING) === 0 && (blockMask & LOCATION_BIT.MAIN_RING) === 0;
-    const ordered = needMain
-      ? ["MAIN_RING" as Location, ...pool.filter((location) => location !== "MAIN_RING")]
-      : pool;
-    for (const location of ordered) {
+    for (const location of pool) {
       if ((mask & LOCATION_BIT[location]) !== 0) continue;
       if ((blockMask & LOCATION_BIT[location]) !== 0) continue;
       if (!allowRepeat && used.has(location)) continue;
@@ -441,7 +369,11 @@ function blockLocationPlans(
     }
   };
   walk(0, [], 0);
-  return plans;
+  const fixed: Location[] = [];
+  for (const location of pool) {
+    if (blockMask & LOCATION_BIT[location]) fixed.push(location);
+  }
+  return sortPlansByLeftPack(plans, pool, fixed);
 }
 
 function searchHorizon(
@@ -538,15 +470,6 @@ function searchHorizon(
       return undefined;
     }
     if (index === order.length) {
-      const mats = locationsForFighterCount(scheduledFighterCount(input)).length;
-      if (mats >= input.requiredHardSessions) {
-        let occupied = 0;
-        for (let block = 1; block <= horizon; block += 1) {
-          if (load[block] > 0) occupied += 1;
-        }
-        // Each fighter can take Main ring only once when locations do not repeat.
-        if (occupied > input.fighters.length) return undefined;
-      }
       return assignLocations(input, prep, chosen, order, blockLocMask, blockPeople, deadline, volunteerCap, () => {
         timedOut = true;
       });
@@ -626,13 +549,11 @@ function assignLocations(
       return undefined;
     }
     if (blockIndex === blocks.length) {
-      if (!everyOccupiedBlockUsesMainRing(placed)) return undefined;
       return assignVolunteers(input, prep, placed, blockPeople, deadline, volunteerCap, markTimeout);
     }
     const block = blocks[blockIndex];
     const fighters = blockFighters.get(block) ?? [];
-    const requireMainRing = (blockLocMask[block] & LOCATION_BIT.MAIN_RING) === 0;
-    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block], allowRepeat, requireMainRing);
+    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block], allowRepeat);
     for (const plan of plans) {
       const applied: Array<{ fighterId: string; location: Location }> = [];
       let ok = true;

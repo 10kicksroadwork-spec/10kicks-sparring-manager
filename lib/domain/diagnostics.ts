@@ -27,13 +27,9 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
     if (
       code === "FIXED_ASSIGNMENT_CONFLICT" ||
       code === "REST_SPACING_CONFLICT" ||
-      code === "LOCATION_COVERAGE_CONFLICT" ||
-      code === "MAIN_RING_REQUIRED"
+      code === "LOCATION_COVERAGE_CONFLICT"
     ) {
       steps.add("Unlock or resolve the completed match that conflicts, then generate again. Completed work stays put.");
-    }
-    if (code === "MAIN_RING_REQUIRED") {
-      steps.add("Every occupied block must use Main ring. Move a floor match up to Main ring, or clear the floors.");
     }
     if (code === "VOLUNTEER_REUSE_WHEN_AVOIDABLE") {
       steps.add("Enough volunteers were available for one block each. Prefer single-block use unless you intentionally swapped someone into a second block.");

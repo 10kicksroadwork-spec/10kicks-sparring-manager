@@ -13,6 +13,11 @@ import {
   type ScheduleInput,
   type SessionAthlete,
 } from "@/lib/domain/types";
+import {
+  isContiguousLeftPack,
+  leftPackPenalty,
+  sortPlansByLeftPack,
+} from "@/lib/domain/location-packing";
 import { validateSchedule } from "@/lib/domain/validator";
 import { canCoverWithoutVolunteerReuse } from "@/lib/domain/volunteer-load";
 
@@ -104,13 +109,12 @@ describe("Saturday rules", () => {
     });
   });
 
-  it("schedules 5 fighters and 15 volunteers packing Main ring, one block per volunteer", () => {
+  it("schedules 5 fighters and 15 volunteers in ~6 blocks, one block per volunteer", () => {
     const full = solve(demoInput());
     expect(full.status).toBe("FEASIBLE");
     if (full.status !== "FEASIBLE") return;
-    // Main ring in every occupied block needs ≤5 occupied blocks (one Main ring per fighter),
-    // which first appears at horizon 9 under rest spacing.
-    expect(full.blockCount).toBe(9);
+    // Left packing within blocks must not inflate the card; prior proven length is 6.
+    expect(full.blockCount).toBe(6);
     expect(full.assignments).toHaveLength(15);
     expect(full.optimality).toBe("PROVEN");
     const validation = validateSchedule(demoInput(), full.assignments);
@@ -138,10 +142,6 @@ describe("Saturday rules", () => {
       expect(list.length).toBe(1);
       expect(new Set(list.map((a) => a.fighterId)).size).toBe(list.length);
     }
-    for (const block of new Set(full.assignments.map((a) => a.blockIndex))) {
-      const locs = full.assignments.filter((a) => a.blockIndex === block).map((a) => a.location);
-      expect(locs).toContain("MAIN_RING");
-    }
 
     for (const assignment of full.assignments) {
       const sharing = full.assignments.filter(
@@ -156,10 +156,10 @@ describe("Saturday rules", () => {
     }
 
     const blocked = solve(demoInput(), 8000, 1);
-    const tooShort = solve({ ...demoInput(), maxBlockHorizon: 8 });
-    expect(tooShort.status).toBe("UNSAT");
-    if (tooShort.status === "UNSAT") {
-      expect(tooShort.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
+    const five = solve({ ...demoInput(), maxBlockHorizon: 5 });
+    expect(five.status).toBe("UNSAT");
+    if (five.status === "UNSAT") {
+      expect(five.diagnostics.some((d) => d.code === "SEARCH_BUDGET_EXHAUSTED")).toBe(false);
     }
     expect(blocked.status).toBe("FEASIBLE");
   });
@@ -201,56 +201,59 @@ describe("Saturday rules", () => {
     }
     expect(Math.max(...byVolunteer.values())).toBeGreaterThan(1);
     expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(2);
-    for (const block of new Set(result.assignments.map((a) => a.blockIndex))) {
-      expect(result.assignments.some((a) => a.blockIndex === block && a.location === "MAIN_RING")).toBe(true);
-    }
+    expect(result.blockCount).toBeLessThanOrEqual(6);
   }, 20_000);
 
-  it("rejects occupied blocks that leave Main ring open on a full card", () => {
-    const schedule = input({
-      fighters: [athlete("f1")],
-      volunteers: [athlete("v1"), athlete("v2"), athlete("v3")],
-    });
-    const card: Assignment[] = [
-      {
-        assignmentId: "a1",
-        sessionId: "s1",
-        generationId: "g",
-        blockIndex: 1,
-        location: "FLOOR_1",
-        fighterId: "f1",
-        volunteerId: "v1",
-        status: "PLANNED",
-        locked: false,
-      },
-      {
-        assignmentId: "a2",
-        sessionId: "s1",
-        generationId: "g",
-        blockIndex: 3,
-        location: "MAIN_RING",
-        fighterId: "f1",
-        volunteerId: "v2",
-        status: "PLANNED",
-        locked: false,
-      },
-      {
-        assignmentId: "a3",
-        sessionId: "s1",
-        generationId: "g",
-        blockIndex: 5,
-        location: "MAIN_RING",
-        fighterId: "f1",
-        volunteerId: "v3",
-        status: "PLANNED",
-        locked: false,
-      },
-    ];
-    const validation = validateSchedule(schedule, card);
-    expect(validation.ok).toBe(false);
-    expect(validation.errors.some((e) => e.code === "MAIN_RING_REQUIRED" && e.blockIndex === 1)).toBe(true);
-    // Partial regenerate checks still allow a locked floor bout so Main ring can be filled later.
-    expect(validateSchedule(schedule, [card[0]], { mode: "partial" }).ok).toBe(true);
+  it("packs two matches in a three-location block onto Main ring and Back Mat (Front open)", () => {
+    // Coach Block-4 annotation: Main Open | Back | Front → shift to Main | Back | Front Open.
+    expect(isContiguousLeftPack(["FLOOR_1", "FLOOR_2"], [...LOCATIONS])).toBe(false);
+    expect(isContiguousLeftPack(["MAIN_RING", "FLOOR_1"], [...LOCATIONS])).toBe(true);
+    expect(isContiguousLeftPack(["MAIN_RING", "FLOOR_2"], [...LOCATIONS])).toBe(false);
+    expect(isContiguousLeftPack(["MAIN_RING", "FLOOR_1", "FLOOR_2"], [...LOCATIONS])).toBe(true);
+
+    const ranked = sortPlansByLeftPack(
+      [
+        ["FLOOR_1", "FLOOR_2"],
+        ["MAIN_RING", "FLOOR_1"],
+        ["MAIN_RING", "FLOOR_2"],
+      ],
+      [...LOCATIONS],
+    );
+    expect(new Set(ranked[0])).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+    expect(leftPackPenalty(["MAIN_RING", "FLOOR_1"], [...LOCATIONS])).toBeLessThan(
+      leftPackPenalty(["FLOOR_1", "FLOOR_2"], [...LOCATIONS]),
+    );
+
+    const full = solve(demoInput());
+    expect(full.status).toBe("FEASIBLE");
+    if (full.status !== "FEASIBLE") return;
+    expect(full.blockCount).toBe(6);
+    for (const block of new Set(full.assignments.map((row) => row.blockIndex))) {
+      const rows = full.assignments.filter((row) => row.blockIndex === block);
+      const locs = rows.map((row) => row.location);
+      const set = new Set(locs);
+      if (locs.length === 3) {
+        expect(set).toEqual(new Set(LOCATIONS));
+      }
+      // Main + Front with Back open is only OK when neither fighter can still take Back Mat.
+      if (locs.length === 2 && set.has("MAIN_RING") && set.has("FLOOR_2") && !set.has("FLOOR_1")) {
+        for (const row of rows) {
+          const elsewhere = full.assignments.filter(
+            (other) => other.fighterId === row.fighterId && other.blockIndex !== block,
+          );
+          expect(elsewhere.some((other) => other.location === "FLOOR_1")).toBe(true);
+        }
+      }
+      // Floor1+Floor2 without Main is only OK when neither fighter can still take Main.
+      if (locs.length === 2 && set.has("FLOOR_1") && set.has("FLOOR_2") && !set.has("MAIN_RING")) {
+        for (const row of rows) {
+          const elsewhere = full.assignments.filter(
+            (other) => other.fighterId === row.fighterId && other.blockIndex !== block,
+          );
+          expect(elsewhere.some((other) => other.location === "MAIN_RING")).toBe(true);
+        }
+      }
+    }
   });
 
   it("warns when a volunteer is reused even though the pool was large enough", () => {

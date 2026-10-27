@@ -198,17 +198,6 @@ export function validateSchedule(
         people.add(personId);
       }
     }
-    // Full cards must pack Main ring. Partial/fixed-only checks skip this so regenerate
-    // can still add a Main ring match beside a locked floor bout when rest spacing allows.
-    if (mode === "full" && group.length > 0 && !locations.has("MAIN_RING")) {
-      errors.push(
-        diagnostic(
-          "MAIN_RING_REQUIRED",
-          `Block ${blockIndex} has hard matches but ${locationLabel("MAIN_RING")} is open. Fill Main ring before Back Mat or Front Mat.`,
-          { blockIndex, details: { locations: [...locations].join(",") } },
-        ),
-      );
-    }
   }
 
   const minGap = input.restGapBlocks + 1;
