@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { eligibleVolunteersForAssignment, type EligibleVolunteerOption } from "@/lib/domain/eligible-volunteers";
 import { coachNextSteps } from "@/lib/domain/diagnostics";
 import { rundownStarted } from "@/lib/domain/rundown";
+import { compactScheduleBlocksToPrefix } from "@/lib/domain/location-packing";
 import { solveSchedule } from "@/lib/domain/solver";
-import type { Assignment, Location, SolveResult } from "@/lib/domain/types";
+import { locationsForFighterCount, scheduledFighterCount, type Assignment, type Location, type SolveResult } from "@/lib/domain/types";
 import { validateSchedule } from "@/lib/domain/validator";
 import type { StoredAssignment } from "@/lib/repository/types";
 import { activeAssignments, loadSession, toScheduleInput, viewSignature } from "./snapshot";
@@ -42,18 +43,26 @@ function seedFor(sessionId: string): number {
   return hash || 1;
 }
 
+function packAssignments(scheduleInput: Awaited<ReturnType<typeof toScheduleInput>>, assignments: Assignment[]): Assignment[] {
+  const pool = locationsForFighterCount(scheduledFighterCount(scheduleInput));
+  return compactScheduleBlocksToPrefix(assignments, pool, true);
+}
+
 async function solveView(repo: Parameters<typeof toScheduleInput>[0], view: NonNullable<Awaited<ReturnType<typeof loadSession>>>, rows: StoredAssignment[]) {
   const generationId = randomUUID();
   const scheduleInput = await toScheduleInput(repo, view, generationId, rows);
   const budget = Math.min(Math.max(view.session.settings.solverBudgetMs ?? 15_000, 1), 25_000);
   let solved = solveSchedule(scheduleInput, { maxComputeMs: budget, deterministicSeed: seedFor(view.session.sessionId) });
-  if (solved.status === "TIME_BUDGET_EXHAUSTED" && solved.bestValidCandidate) {
-    const validation = validateSchedule(scheduleInput, solved.bestValidCandidate);
+  if (solved.status === "FEASIBLE") {
+    solved = { ...solved, assignments: packAssignments(scheduleInput, solved.assignments) };
+  } else if (solved.status === "TIME_BUDGET_EXHAUSTED" && solved.bestValidCandidate) {
+    const packed = packAssignments(scheduleInput, solved.bestValidCandidate);
+    const validation = validateSchedule(scheduleInput, packed);
     if (validation.ok) {
-      const blockCount = solved.bestValidCandidate.reduce((max, row) => Math.max(max, row.blockIndex), 0);
+      const blockCount = packed.reduce((max, row) => Math.max(max, row.blockIndex), 0);
       solved = {
         status: "FEASIBLE",
-        assignments: solved.bestValidCandidate,
+        assignments: packed,
         blockCount,
         score: 0,
         optimality: "NOT_PROVEN",

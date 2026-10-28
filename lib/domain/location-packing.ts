@@ -139,6 +139,7 @@ export function compactBlockToPrefix(
 /**
  * Coach Block-4 / Block-6 style holes: shift matches left within a block when possible.
  * Does not change block membership or inflate horizon — only location IDs on movable rows.
+ * When allowRepeat is true, never keep a packing hole — fall back to an unconstrained remap.
  */
 export function compactScheduleBlocksToPrefix(
   assignments: Assignment[],
@@ -168,8 +169,21 @@ export function compactScheduleBlocksToPrefix(
       }
       usedElsewhere.set(row.fighterId, used);
     }
-    const compacted = compactBlockToPrefix(group, pool, usedElsewhere, allowRepeat);
+    let compacted = compactBlockToPrefix(group, pool, usedElsewhere, allowRepeat);
+    // Hard rule: with repeats allowed, do not publish Main/Back holes (Block 4/6 shapes).
+    if (
+      allowRepeat &&
+      (!compacted || !isContiguousLeftPack(compacted.map((row) => row.location), pool))
+    ) {
+      compacted = compactBlockToPrefix(group, pool, emptyUsedMap(group), true);
+    }
     result.push(...(compacted ?? group.map((row) => ({ ...row }))));
   }
   return result;
+}
+
+function emptyUsedMap(group: Assignment[]): Map<string, Set<Location>> {
+  const used = new Map<string, Set<Location>>();
+  for (const row of group) used.set(row.fighterId, new Set());
+  return used;
 }

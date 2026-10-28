@@ -15,6 +15,7 @@ import {
 } from "@/lib/domain/types";
 import {
   compactBlockToPrefix,
+  compactScheduleBlocksToPrefix,
   isContiguousLeftPack,
   leftPackPenalty,
   sortPlansByLeftPack,
@@ -150,7 +151,21 @@ describe("Saturday rules", () => {
       const set = new Set(locs);
       expect(set.has("MAIN_RING") && set.has("FLOOR_2") && !set.has("FLOOR_1")).toBe(false);
       expect(set.has("FLOOR_1") && set.has("FLOOR_2") && !set.has("MAIN_RING")).toBe(false);
+      // 2 matches in a 3-mat block must be exactly Main + Back (Front Open only).
+      if (locs.length === 2) {
+        expect(set).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+      }
     }
+    // Coach screenshot shapes must not appear anywhere on a fresh 5-fighter card.
+    expect(
+      [...new Set(full.assignments.map((row) => row.blockIndex))].some((block) => {
+        const set = new Set(full.assignments.filter((row) => row.blockIndex === block).map((row) => row.location));
+        return (
+          (set.has("FLOOR_1") && set.has("FLOOR_2") && !set.has("MAIN_RING")) ||
+          (set.has("MAIN_RING") && set.has("FLOOR_2") && !set.has("FLOOR_1"))
+        );
+      }),
+    ).toBe(false);
 
     for (const assignment of full.assignments) {
       const sharing = full.assignments.filter(
@@ -271,6 +286,61 @@ describe("Saturday rules", () => {
     expect(compacted!.find((row) => row.fighterId === "mason")?.location).toBe("MAIN_RING");
     expect(compacted!.find((row) => row.fighterId === "malachi")?.location).toBe("FLOOR_1");
     expect(isContiguousLeftPack(compacted!.map((row) => row.location), [...LOCATIONS])).toBe(true);
+  });
+
+  it("schedule-level compaction closes every Block-4/6 hole when repeats are allowed", () => {
+    const holey: Assignment[] = [
+      {
+        assignmentId: "b4a",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 4,
+        location: "FLOOR_1",
+        fighterId: "f1",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "b4b",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 4,
+        location: "FLOOR_2",
+        fighterId: "f2",
+        volunteerId: "v2",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "b6a",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 6,
+        location: "MAIN_RING",
+        fighterId: "f3",
+        volunteerId: "v3",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "b6b",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 6,
+        location: "FLOOR_2",
+        fighterId: "f4",
+        volunteerId: "v4",
+        status: "PLANNED",
+        locked: false,
+      },
+    ];
+    const packed = compactScheduleBlocksToPrefix(holey, [...LOCATIONS], true);
+    for (const block of [4, 6]) {
+      const locs = packed.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(new Set(locs)).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+    }
   });
 
   it("Block-6 shape: Back + Front with Main open is rejected and compacts to Main + Back", () => {
