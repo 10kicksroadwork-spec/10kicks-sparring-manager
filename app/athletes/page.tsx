@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Shell } from "@/components/common/Shell";
+import { NumericField } from "@/components/common/NumericField";
 import { api, newRequestId } from "@/components/common/client";
 import { isReadyForHardMatch } from "@/lib/domain/profile";
+import { parseNumericDraft, validateRequiredNumericDraft } from "@/lib/ui/numeric-draft";
 
 type Athlete = {
   athleteId: string;
@@ -62,13 +64,20 @@ export default function AthletesPage() {
     event.preventDefault();
     setError("");
     setNotice("");
+    const validationError =
+      validateRequiredNumericDraft({ label: "a weight in pounds", draft: form.weightLbs, min: 0.1, max: 500 }) ??
+      validateRequiredNumericDraft({ label: "a skill from 1 to 7", draft: form.skill, min: 1, max: 7, integer: true });
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     const result = await api<{ athlete: Athlete }>("/api/athletes", {
       method: "POST",
       body: JSON.stringify({
         requestId: newRequestId(),
         displayName: form.displayName,
-        weightLbs: Number(form.weightLbs),
-        skill: Number(form.skill),
+        weightLbs: parseNumericDraft(form.weightLbs),
+        skill: parseNumericDraft(form.skill),
         roleEligibility: form.roleEligibility,
         coachNotes: form.coachNotes,
       }),
@@ -109,12 +118,12 @@ export default function AthletesPage() {
           </li>
         ))}
       </ul>
-      <form className="card mt-6 grid gap-3" onSubmit={(event) => void addAthlete(event)}>
+      <form className="card mt-6 grid gap-3" onSubmit={(event) => void addAthlete(event)} noValidate>
         <h2 className="font-display text-3xl">Add athlete</h2>
         <input className="field" required aria-label="Name" placeholder="Name" value={form.displayName} onChange={(event) => setForm({ ...form, displayName: event.target.value })} />
-        <input className="field" required inputMode="decimal" aria-label="Weight in pounds" placeholder="Weight (lb)" value={form.weightLbs} onChange={(event) => setForm({ ...form, weightLbs: event.target.value })} />
+        <NumericField required allowDecimal inputMode="decimal" aria-label="Weight in pounds" placeholder="Weight (lb)" value={form.weightLbs} onChange={(weightLbs) => setForm({ ...form, weightLbs })} />
         <label>Skill
-          <input className="field" aria-label="Skill" inputMode="numeric" min={1} max={7} value={form.skill} onChange={(event) => setForm({ ...form, skill: event.target.value })} />
+          <NumericField aria-label="Skill" inputMode="numeric" min={1} max={7} value={form.skill} onChange={(skill) => setForm({ ...form, skill })} />
         </label>
         <label>Role
           <select className="field" aria-label="Role eligibility" value={form.roleEligibility} onChange={(event) => setForm({ ...form, roleEligibility: event.target.value })}>
