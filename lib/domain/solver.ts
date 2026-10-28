@@ -68,6 +68,8 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
 
   const lower = lowerBound(input, prep);
   const maxH = Math.max(lower, input.maxBlockHorizon);
+  // Always attempt single-block volunteers first when the pool is large enough.
+  // If that fails (or the pool is thin), fall back to maxVolunteerSessions reuse.
   const preferSingleBlock = canCoverWithoutVolunteerReuse(input);
   const volunteerCaps = preferSingleBlock
     ? [1, input.maxVolunteerSessions]
@@ -89,16 +91,9 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
         const packed = compactScheduleBlocksToPrefix(found.assignments, pool, true);
         const validation = validateSchedule(input, packed);
         if (!validation.ok) {
-          return {
-            status: "UNSAT",
-            diagnostics: [
-              diagnostic(
-                "SOLVER_REJECTED_CANDIDATE",
-                "The search built a lineup that failed the independent validator, so nothing was published. This is not proof the session is impossible.",
-              ),
-              ...validation.errors,
-            ],
-          };
+          // Keep searching other horizons / volunteer caps instead of aborting.
+          // Single-block (cap=1) must still fall through to reuse when needed.
+          continue;
         }
         const optimality = smallerExhausted ? "PROVEN" : "NOT_PROVEN";
         const notes = validation.warnings.map((w) => w.message);
@@ -106,6 +101,9 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
           notes.unshift("Minimum block count for this attendance was proven. The matchup score is the first deterministic valid lineup, not a clinical ranking.");
         } else {
           notes.unshift("Valid schedule — not proven shortest.");
+        }
+        if (volunteerCap === 1) {
+          notes.unshift("Each volunteer is used in at most one block because the pool covered every hard session.");
         }
         return feasible(input, packed, optimality, notes);
       }
@@ -711,7 +709,13 @@ function assignVolunteers(
         score: pairCompatibility(fighter, volunteer, input.limits, input.scoringWeights),
       });
     }
-    ids.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+    // Prefer unused volunteers before reuse so thin pools do not leave people idle
+    // while others are booked into a second block.
+    ids.sort((a, b) => {
+      const loadGap = (volCount.get(a.id) ?? 0) - (volCount.get(b.id) ?? 0);
+      if (loadGap !== 0) return loadGap;
+      return b.score - a.score || a.id.localeCompare(b.id);
+    });
     return ids.map((item) => item.id);
   };
 

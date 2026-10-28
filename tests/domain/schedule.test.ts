@@ -231,6 +231,30 @@ describe("Saturday rules", () => {
     }
   }, 20_000);
 
+  it("uses every checked-in volunteer before reusing when the pool is just short of demand", () => {
+    // 13 volunteers / 15 hard sessions: reuse is required, but nobody should sit idle
+    // while four others are double-booked (live coach screenshot pattern).
+    const schedule = input({
+      fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+      volunteers: Array.from({ length: 13 }, (_, i) => athlete(`v${i + 1}`)),
+    });
+    expect(canCoverWithoutVolunteerReuse(schedule)).toBe(false);
+    const result = solve(schedule, 12_000);
+    expect(result.status).toBe("FEASIBLE");
+    if (result.status !== "FEASIBLE") return;
+    const byVolunteer = new Map<string, number>();
+    for (const row of result.assignments) {
+      byVolunteer.set(row.volunteerId, (byVolunteer.get(row.volunteerId) ?? 0) + 1);
+    }
+    expect(byVolunteer.size).toBe(13);
+    expect(Math.max(...byVolunteer.values())).toBe(2);
+    expect([...byVolunteer.values()].filter((count) => count > 1)).toHaveLength(2);
+    for (const block of new Set(result.assignments.map((row) => row.blockIndex))) {
+      const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+    }
+  }, 20_000);
+
   it("Block-4 shape: Main + Front with Back open is rejected and compacts to Main + Back", () => {
     // Coach screenshot: Main filled | Back Open | Malachi on Front → Malachi to Back, Front Open.
     expect(isContiguousLeftPack(["MAIN_RING", "FLOOR_2"], [...LOCATIONS])).toBe(false);
