@@ -16,7 +16,7 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
       steps.add("Add a compatible volunteer, or review the proposed numeric limits and any named exclusions.");
     }
     if (code === "INSUFFICIENT_TOTAL_VOLUNTEER_CAPACITY" || code === "VOLUNTEER_MAX_EXCEEDED") {
-      steps.add("Check in more volunteers. Each volunteer can take at most 2 hard sessions.");
+      steps.add("Check in more volunteers. Each volunteer can take at most 3 hard sessions.");
     }
     if (code === "EMPTY_FIGHTER_ATTENDANCE") {
       steps.add("Check in the fighters who are actually here before generating.");

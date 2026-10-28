@@ -10,7 +10,7 @@ The numeric match limits shipped here are **proposed defaults pending coach revi
 
 - Each fighter needs 3 hard sessions, each session is 2 rounds, each with a different volunteer.
 - With 5 or more fighters, each block can use Main ring, Back Mat, and Front Mat. With fewer than 5 fighters, only Main ring and Back Mat are used. Within every block, occupied locations must be a prefix of Main ring → Back Mat → Front Mat (never leave a higher-priority mat open). Location variety is preferred, but repeats are allowed so 5-fighter cards stay ~6 blocks while packing.
-- A volunteer works at most 2 hard sessions, against different fighters. When enough people are checked in, generate prefers one block per volunteer; reuse is only used when the pool is too thin.
+- A volunteer works at most 3 hard sessions, against different fighters. When enough people are checked in, generate prefers one block per volunteer; reuse (up to 3) is only used when the pool is too thin.
 - Nobody is double-booked, and nobody works hard blocks back to back.
 - Light/recovery is a placeholder. The app does not assign a partner for it.
 - Named exclusions are absolute. A numeric exception needs the coach's email, a reason, and an acknowledgment, and it covers only that session.

@@ -116,7 +116,7 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
     diagnostics: [
       diagnostic(
         "SCHEDULE_INFEASIBLE",
-        `No complete schedule exists within ${maxH} blocks under the Saturday rules: 3 hard sessions, one resting block between hard sessions, ${locationPhrase(input)}, and at most 2 volunteer sessions. Limits were not relaxed and nobody was dropped.`,
+        `No complete schedule exists within ${maxH} blocks under the Saturday rules: 3 hard sessions, one resting block between hard sessions, ${locationPhrase(input)}, and at most 3 volunteer sessions. Limits were not relaxed and nobody was dropped.`,
         { details: { maxBlockHorizon: maxH, lowerBound: lower } },
       ),
     ],
@@ -198,11 +198,11 @@ function prepare(input: ScheduleInput): Prep {
     );
     return { diagnostics, demand: 0, needed: new Map(), eligibleIds: new Map(), fixedByFighter: new Map() };
   }
-  if (input.requiredHardSessions !== 3 || input.maxVolunteerSessions !== 2 || input.restGapBlocks !== 1) {
+  if (input.requiredHardSessions !== 3 || input.maxVolunteerSessions !== 3 || input.restGapBlocks !== 1) {
     diagnostics.push(
       diagnostic(
         "INPUT_INVALID",
-        "Version 1 only schedules the Saturday preset: 3 hard sessions, volunteer cap 2, and one resting block.",
+        "Version 1 only schedules the Saturday preset: 3 hard sessions, volunteer cap 3, and one resting block.",
       ),
     );
   }

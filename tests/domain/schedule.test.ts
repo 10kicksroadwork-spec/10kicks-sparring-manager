@@ -38,7 +38,7 @@ function input(overrides: Partial<ScheduleInput> = {}): ScheduleInput {
     overrides: [],
     fixedAssignments: [],
     requiredHardSessions: 3,
-    maxVolunteerSessions: 2,
+    maxVolunteerSessions: 3,
     restGapBlocks: 1,
     scoringWeights: { weight: 0.4, skill: 0.6, aggression: 0 },
     maxBlockHorizon: 12,
@@ -210,7 +210,7 @@ describe("Saturday rules", () => {
     expect(validateSchedule(schedule, result.assignments).ok).toBe(true);
   }, 20_000);
 
-  it("allows volunteer reuse up to 2 when the pool is too thin for single-block use", () => {
+  it("allows volunteer reuse up to 3 when the pool is too thin for single-block use", () => {
     const schedule = input({
       fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
       volunteers: Array.from({ length: 10 }, (_, i) => athlete(`v${i + 1}`)),
@@ -224,7 +224,31 @@ describe("Saturday rules", () => {
       byVolunteer.set(row.volunteerId, (byVolunteer.get(row.volunteerId) ?? 0) + 1);
     }
     expect(Math.max(...byVolunteer.values())).toBeGreaterThan(1);
-    expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(2);
+    expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(3);
+    for (const block of new Set(result.assignments.map((row) => row.blockIndex))) {
+      const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+    }
+  }, 20_000);
+
+  it("generates with 7 volunteers for 5 fighters under the cap of 3", () => {
+    // Coach screenshot: 5×3=15 hard sessions, 7 volunteers → need cap 3 (capacity 21), not 2 (14).
+    const schedule = input({
+      fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+      volunteers: Array.from({ length: 7 }, (_, i) => athlete(`v${i + 1}`)),
+    });
+    expect(canCoverWithoutVolunteerReuse(schedule)).toBe(false);
+    const result = solve(schedule, 12_000);
+    expect(result.status).toBe("FEASIBLE");
+    if (result.status !== "FEASIBLE") return;
+    expect(result.assignments).toHaveLength(15);
+    const byVolunteer = new Map<string, number>();
+    for (const row of result.assignments) {
+      byVolunteer.set(row.volunteerId, (byVolunteer.get(row.volunteerId) ?? 0) + 1);
+    }
+    expect(byVolunteer.size).toBe(7);
+    expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(3);
+    expect(Math.max(...byVolunteer.values())).toBeGreaterThan(1);
     for (const block of new Set(result.assignments.map((row) => row.blockIndex))) {
       const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
       expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
@@ -639,16 +663,18 @@ describe("Saturday rules", () => {
     }
   });
 
-  it("reports volunteer capacity when 7 volunteers cannot cover 15 sessions", () => {
+  it("reports volunteer capacity when 4 volunteers cannot cover 15 sessions under the cap of 3", () => {
+    // Cap 3 → 4×3=12 < 15. (7 volunteers now cover 15 under the raised cap.)
     const result = solve(
       input({
         fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
-        volunteers: [1, 2, 3, 4, 5, 6, 7].map((n) => athlete(`v${n}`)),
+        volunteers: [1, 2, 3, 4].map((n) => athlete(`v${n}`)),
       }),
     );
     expect(result.status).toBe("UNSAT");
     if (result.status === "UNSAT") {
       expect(result.diagnostics.some((d) => d.code === "INSUFFICIENT_TOTAL_VOLUNTEER_CAPACITY")).toBe(true);
+      expect(result.diagnostics.some((d) => /cap of 3/.test(d.message))).toBe(true);
     }
   });
 

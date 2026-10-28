@@ -204,7 +204,7 @@ export function saturdayPresetSettings(limits: MatchingLimits = PROPOSED_MATCH_L
     timing: { roundMinutes: 3, restSeconds: 60 },
     requiredHardSessionsPerFighter: 3,
     hardRoundsPerSession: HARD_ROUNDS_PER_ASSIGNMENT,
-    maxVolunteerHardSessions: 2,
+    maxVolunteerHardSessions: 3,
     restGapBlocks: 1,
     locations: [...LOCATIONS],
     scoringWeights: { ...DEFAULT_SCORING_WEIGHTS },

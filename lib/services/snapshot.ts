@@ -104,7 +104,7 @@ export async function toScheduleInput(
       approvedNumericExceptionId: row.approvedNumericExceptionId,
     })),
     requiredHardSessions: 3,
-    maxVolunteerSessions: 2,
+    maxVolunteerSessions: settings.maxVolunteerHardSessions ?? 3,
     restGapBlocks: 1,
     scoringWeights: settings.scoringWeights,
     maxBlockHorizon: settings.maxBlockHorizon,
