@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { eligibleVolunteersForAssignment, type EligibleVolunteerOption } from "@/lib/domain/eligible-volunteers";
 import { coachNextSteps } from "@/lib/domain/diagnostics";
 import { rundownStarted } from "@/lib/domain/rundown";
+import { compactScheduleBlocksToPrefix } from "@/lib/domain/location-packing";
 import { solveSchedule } from "@/lib/domain/solver";
-import type { Assignment, Location, SolveResult } from "@/lib/domain/types";
+import { locationsForFighterCount, scheduledFighterCount, type Assignment, type Location, type SolveResult } from "@/lib/domain/types";
 import { validateSchedule } from "@/lib/domain/validator";
 import type { StoredAssignment } from "@/lib/repository/types";
 import { activeAssignments, loadSession, toScheduleInput, viewSignature } from "./snapshot";
-import { type Actor, fail, type ServiceResult, ServiceStop, withWrite } from "./support";
+import { type Actor, fail, openStore, type ServiceResult, ServiceStop, withWrite } from "./support";
+import { can } from "@/lib/permissions";
 
 function publicSolve(result: SolveResult) {
   if (result.status === "FEASIBLE") {
@@ -40,18 +43,26 @@ function seedFor(sessionId: string): number {
   return hash || 1;
 }
 
+function packAssignments(scheduleInput: Awaited<ReturnType<typeof toScheduleInput>>, assignments: Assignment[]): Assignment[] {
+  const pool = locationsForFighterCount(scheduledFighterCount(scheduleInput));
+  return compactScheduleBlocksToPrefix(assignments, pool, true);
+}
+
 async function solveView(repo: Parameters<typeof toScheduleInput>[0], view: NonNullable<Awaited<ReturnType<typeof loadSession>>>, rows: StoredAssignment[]) {
   const generationId = randomUUID();
   const scheduleInput = await toScheduleInput(repo, view, generationId, rows);
   const budget = Math.min(Math.max(view.session.settings.solverBudgetMs ?? 15_000, 1), 25_000);
   let solved = solveSchedule(scheduleInput, { maxComputeMs: budget, deterministicSeed: seedFor(view.session.sessionId) });
-  if (solved.status === "TIME_BUDGET_EXHAUSTED" && solved.bestValidCandidate) {
-    const validation = validateSchedule(scheduleInput, solved.bestValidCandidate);
+  if (solved.status === "FEASIBLE") {
+    solved = { ...solved, assignments: packAssignments(scheduleInput, solved.assignments) };
+  } else if (solved.status === "TIME_BUDGET_EXHAUSTED" && solved.bestValidCandidate) {
+    const packed = packAssignments(scheduleInput, solved.bestValidCandidate);
+    const validation = validateSchedule(scheduleInput, packed);
     if (validation.ok) {
-      const blockCount = solved.bestValidCandidate.reduce((max, row) => Math.max(max, row.blockIndex), 0);
+      const blockCount = packed.reduce((max, row) => Math.max(max, row.blockIndex), 0);
       solved = {
         status: "FEASIBLE",
-        assignments: solved.bestValidCandidate,
+        assignments: packed,
         blockCount,
         score: 0,
         optimality: "NOT_PROVEN",
@@ -180,6 +191,52 @@ export async function unpublishRundown(
   });
 }
 
+export async function listAssignmentSwapOptions(
+  actor: Actor,
+  sessionId: string,
+  assignmentId: string,
+  requestId = "read",
+): Promise<ServiceResult<{ assignmentId: string; volunteers: EligibleVolunteerOption[] }>> {
+  if (!can(actor.role, "read")) return fail(403, "FORBIDDEN", "Your account cannot do that.", requestId);
+  const opened = await openStore(requestId);
+  if ("ok" in opened) return opened;
+  const view = await loadSession(opened.repo, sessionId);
+  if (!view?.session.activeGenerationId) return fail(404, "NOT_FOUND", "That match is not on the active rundown.", requestId);
+  const active = activeAssignments(view);
+  const current = active.find((row) => row.assignmentId === assignmentId);
+  if (!current) return fail(404, "NOT_FOUND", "That match is not on the active rundown.", requestId);
+  const input = await toScheduleInput(opened.repo, view, view.session.activeGenerationId, active);
+  return {
+    ok: true,
+    requestId,
+    data: {
+      assignmentId,
+      volunteers: eligibleVolunteersForAssignment(input, active, assignmentId),
+    },
+  };
+}
+
+export async function listSessionSwapOptions(
+  actor: Actor,
+  sessionId: string,
+  requestId = "read",
+): Promise<ServiceResult<{ swaps: Record<string, EligibleVolunteerOption[]> }>> {
+  if (!can(actor.role, "read")) return fail(403, "FORBIDDEN", "Your account cannot do that.", requestId);
+  const opened = await openStore(requestId);
+  if ("ok" in opened) return opened;
+  const view = await loadSession(opened.repo, sessionId);
+  if (!view) return fail(404, "NOT_FOUND", "That session does not exist.", requestId);
+  if (!view.session.activeGenerationId) return { ok: true, requestId, data: { swaps: {} } };
+  const active = activeAssignments(view);
+  const input = await toScheduleInput(opened.repo, view, view.session.activeGenerationId, active);
+  const swaps: Record<string, EligibleVolunteerOption[]> = {};
+  for (const row of active) {
+    if (row.locked || row.status !== "PLANNED") continue;
+    swaps[row.assignmentId] = eligibleVolunteersForAssignment(input, active, row.assignmentId);
+  }
+  return { ok: true, requestId, data: { swaps } };
+}
+
 export async function patchAssignment(
   actor: Actor,
   sessionId: string,
@@ -223,12 +280,40 @@ export async function patchAssignment(
         next.status = body.status;
       }
       if (body.action === "set-volunteer") {
+        if (current.locked) {
+          throw new ServiceStop(fail(409, "MATCH_LOCKED", "Unlock this match before changing the volunteer.", body.requestId));
+        }
+        if (current.status !== "PLANNED") {
+          throw new ServiceStop(
+            fail(409, "MATCH_FIXED", "Completed or started matches keep their volunteer. Change only planned matches.", body.requestId),
+          );
+        }
         if (!body.volunteerId) throw new ServiceStop(fail(400, "BAD_REQUEST", "Choose a volunteer.", body.requestId));
+        if (body.volunteerId === current.volunteerId) {
+          throw new ServiceStop(fail(400, "BAD_REQUEST", "That volunteer is already on this match.", body.requestId));
+        }
         const input = await toScheduleInput(repo, view, session.activeGenerationId, active);
         const fighter = input.fighters.find((row) => row.athleteId === current.fighterId);
         const volunteer = input.volunteers.find((row) => row.athleteId === body.volunteerId);
         if (!fighter || !volunteer) {
           throw new ServiceStop(fail(400, "NOT_ELIGIBLE", "That volunteer is not checked in for this session.", body.requestId));
+        }
+        const eligible = eligibleVolunteersForAssignment(input, active, assignmentId);
+        const choice = eligible.find((row) => row.volunteerId === body.volunteerId && !row.current);
+        if (!choice) {
+          const { evaluatePair } = await import("@/lib/domain/matchmaking");
+          const decision = evaluatePair({
+            sessionId,
+            fighter,
+            volunteer,
+            limits: input.limits,
+            restrictions: input.restrictions,
+            overrides: input.overrides,
+          });
+          const reason = decision.eligible
+            ? "That swap breaks rest, workload, double-booking, or another Saturday rule."
+            : decision.reasons.join(" ");
+          throw new ServiceStop(fail(400, "NOT_ELIGIBLE", reason, body.requestId));
         }
         const { evaluatePair } = await import("@/lib/domain/matchmaking");
         const decision = evaluatePair({
@@ -239,9 +324,6 @@ export async function patchAssignment(
           restrictions: input.restrictions,
           overrides: input.overrides,
         });
-        if (!decision.eligible) {
-          throw new ServiceStop(fail(400, "NOT_ELIGIBLE", decision.reasons.join(" "), body.requestId));
-        }
         next.volunteerId = body.volunteerId;
         next.approvedNumericExceptionId = decision.overrideId;
       }

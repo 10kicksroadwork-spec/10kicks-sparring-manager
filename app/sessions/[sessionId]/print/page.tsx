@@ -59,7 +59,7 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
                 const match = view?.assignments.find((row) => row.blockIndex === block && row.location === location);
                 return (
                   <td key={location} className="border-b border-neutral-300 py-2">
-                    {match ? `${names.get(match.fighterId) ?? "Unknown"} / ${names.get(match.volunteerId) ?? "Unknown"} · 2 rounds${match.status === "INTERRUPTED" ? " · interrupted" : ""}` : "Open"}
+                    {match ? `${names.get(match.fighterId) ?? "Unknown"} / ${names.get(match.volunteerId) ?? "Unknown"}${match.status === "INTERRUPTED" ? " · interrupted" : ""}` : "Open"}
                   </td>
                 );
               })}
@@ -67,7 +67,7 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
           ))}
         </tbody>
       </table>
-      <button className="no-print mt-6 underline" type="button" onClick={() => window.print()} data-testid="print-rundown">Print or save PDF</button>
+      <button className="tap tap-gold no-print mt-6 h-12 w-full max-w-sm text-base" type="button" onClick={() => window.print()} data-testid="print-rundown">Print or save PDF</button>
       <p className="sr-only">{blocks.map((block) => locationLabel("MAIN_RING") + block).join(" ")}</p>
     </main>
   );

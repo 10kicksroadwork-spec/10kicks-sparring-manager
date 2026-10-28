@@ -1,6 +1,6 @@
 import { guardRead, guardWrite, respond } from "@/lib/api/guard";
 import { confirmSchema } from "@/lib/schemas";
-import { cancelSession, getSession } from "@/lib/services/session-service";
+import { deleteSession, getSession } from "@/lib/services/session-service";
 
 export const runtime = "nodejs";
 
@@ -11,9 +11,10 @@ export async function GET(req: Request, context: { params: Promise<{ sessionId: 
   return respond(await getSession(actor, sessionId));
 }
 
+/** Permanently delete the session and related attendance / assignments / overrides / audit. */
 export async function DELETE(req: Request, context: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = await context.params;
   const guarded = await guardWrite(req, confirmSchema, ["admin", "coach"]);
   if (guarded instanceof Response) return guarded;
-  return respond(await cancelSession(guarded.actor, sessionId, guarded.body));
+  return respond(await deleteSession(guarded.actor, sessionId, guarded.body));
 }

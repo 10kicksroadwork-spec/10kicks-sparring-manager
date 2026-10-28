@@ -16,7 +16,7 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
       steps.add("Add a compatible volunteer, or review the proposed numeric limits and any named exclusions.");
     }
     if (code === "INSUFFICIENT_TOTAL_VOLUNTEER_CAPACITY" || code === "VOLUNTEER_MAX_EXCEEDED") {
-      steps.add("Check in more volunteers. Each volunteer can take at most 2 hard sessions.");
+      steps.add("Check in more volunteers. Each volunteer can take at most 3 hard sessions.");
     }
     if (code === "EMPTY_FIGHTER_ATTENDANCE") {
       steps.add("Check in the fighters who are actually here before generating.");
@@ -24,8 +24,18 @@ export function coachNextSteps(codes: ConflictCode[]): string[] {
     if (code === "EMPTY_VOLUNTEER_ATTENDANCE" || code === "ROLE_CONFLICT") {
       steps.add("Check people in on the volunteer list. One person takes one role this Saturday and is not paired with themselves.");
     }
-    if (code === "FIXED_ASSIGNMENT_CONFLICT" || code === "REST_SPACING_CONFLICT" || code === "LOCATION_COVERAGE_CONFLICT") {
+    if (
+      code === "FIXED_ASSIGNMENT_CONFLICT" ||
+      code === "REST_SPACING_CONFLICT" ||
+      code === "LOCATION_COVERAGE_CONFLICT"
+    ) {
       steps.add("Unlock or resolve the completed match that conflicts, then generate again. Completed work stays put.");
+    }
+    if (code === "LOCATION_PACKING_HOLE") {
+      steps.add("Shift matches left in that block: fill Main ring, then Back Mat, then Front Mat. Do not leave a higher-priority mat open.");
+    }
+    if (code === "VOLUNTEER_REUSE_WHEN_AVOIDABLE") {
+      steps.add("Enough volunteers were available for one block each. Prefer single-block use unless you intentionally swapped someone into a second block.");
     }
     if (code === "SEARCH_BUDGET_EXHAUSTED") {
       steps.add("This is not proof that a schedule is impossible. Retry generation, or remove a constraint and try again.");

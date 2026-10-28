@@ -112,6 +112,8 @@ export interface SparringRepository {
   readOverrides(sessionId?: string): Promise<ReadResult<StoredOverride>>;
   readAudit(sessionId?: string): Promise<ReadResult<AuditEvent>>;
   commit(batch: CommitBatch): Promise<void>;
+  /** Permanently remove a session and its attendance, assignments, overrides, and audit rows. */
+  deleteSessionCascade(sessionId: string): Promise<void>;
 }
 
 export type Limits = MatchingLimits;

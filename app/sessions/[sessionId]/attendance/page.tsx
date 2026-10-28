@@ -9,6 +9,7 @@ import { partitionCheckIn } from "@/lib/domain/check-in-lists";
 import { isReadyForHardMatch } from "@/lib/domain/profile";
 import { rundownStarted } from "@/lib/domain/rundown";
 import { parseNumericDraft, validateRequiredNumericDraft } from "@/lib/ui/numeric-draft";
+import { previousCompletedSessions, type SessionSummary } from "@/lib/ui/saturday-nav";
 
 type Athlete = { athleteId: string; displayName: string; weightLbs: number | null; skill: number | null; aggression: number | null; roleEligibility: string; active: boolean };
 type Attendance = { athleteId: string; displayName: string; assignedRole: "FIGHTER" | "VOLUNTEER"; present: boolean; availabilityStatus: string; weightLbsSnapshot: number; skillSnapshot: number; aggressionSnapshot: number | null };
@@ -50,6 +51,7 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
   const [pending, setPending] = useState(0);
   const [walkIn, setWalkIn] = useState({ displayName: "", weightLbs: "", skill: "3" });
   const [query, setQuery] = useState("");
+  const [previousSessions, setPreviousSessions] = useState<SessionSummary[]>([]);
   const revisionRef = useRef(0);
   const chainRef = useRef(Promise.resolve());
   const desiredRef = useRef(new Map<string, { athlete: Athlete; role: "FIGHTER" | "VOLUNTEER"; present: boolean }>());
@@ -71,9 +73,10 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
   useEffect(() => {
     let ignore = false;
     void (async () => {
-      const [roster, session] = await Promise.all([
+      const [roster, session, sessions] = await Promise.all([
         api<{ athletes: Athlete[] }>("/api/athletes"),
         api<SessionPayload>(`/api/sessions/${sessionId}`),
+        api<{ sessions: SessionSummary[] }>("/api/sessions"),
       ]);
       if (ignore) return;
       if (!roster.ok) {
@@ -84,6 +87,7 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
         setError(session.error.message);
         return;
       }
+      if (sessions.ok) setPreviousSessions(previousCompletedSessions(sessions.data.sessions, sessionId));
       setAthletes(roster.data.athletes);
       let next = session.data;
       if (needsCampSeed(roster.data.athletes, next)) {
@@ -305,6 +309,27 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
           {busy ? "Generating…" : pending > 0 ? "Saving check-in…" : "Generate rundown"}
         </button>
       </div>
+      <details className="mt-8" data-testid="previous-sessions">
+        <summary className="font-display text-3xl cursor-pointer select-none">Previous Sessions</summary>
+        <ul className="mt-3 grid gap-2">
+          {previousSessions.length === 0 ? (
+            <li className="text-[var(--muted)]">No completed sessions yet.</li>
+          ) : (
+            previousSessions.map((session) => (
+              <li key={session.sessionId}>
+                <a
+                  className="card block min-h-11"
+                  href={`/sessions/${session.sessionId}/rundown?from=${encodeURIComponent(sessionId)}`}
+                  data-testid={`previous-session-${session.sessionId}`}
+                >
+                  <span className="font-semibold">{session.dateLocal}</span>
+                  <span className="ml-2 text-[var(--muted)]">{session.status} · rev {session.revision}</span>
+                </a>
+              </li>
+            ))
+          )}
+        </ul>
+      </details>
     </Shell>
   );
 }

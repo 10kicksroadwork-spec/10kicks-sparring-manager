@@ -134,6 +134,16 @@ export async function getSession(actor: Actor, sessionId: string, requestId = "r
   const names = new Map(athletes.rows.map((athlete) => [athlete.athleteId, athlete]));
   const active = activeAssignments(view);
   const eligibility = await eligibilityReport(opened.repo, view);
+  const swaps: Record<string, { volunteerId: string; displayName: string; current: boolean; reasons: string[] }[]> = {};
+  if (view.session.activeGenerationId) {
+    const { toScheduleInput } = await import("./snapshot");
+    const { eligibleVolunteersForAssignment } = await import("@/lib/domain/eligible-volunteers");
+    const input = await toScheduleInput(opened.repo, view, view.session.activeGenerationId, active);
+    for (const row of active) {
+      if (row.locked || row.status !== "PLANNED") continue;
+      swaps[row.assignmentId] = eligibleVolunteersForAssignment(input, active, row.assignmentId);
+    }
+  }
   return {
     ok: true as const,
     requestId,
@@ -144,6 +154,7 @@ export async function getSession(actor: Actor, sessionId: string, requestId = "r
       assignments: active,
       corrupt: view.corrupt,
       eligibility,
+      swaps,
     },
   };
 }
@@ -294,6 +305,32 @@ export async function cancelSession(
       if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
       if (!body.confirm) throw new ServiceStop(fail(400, "CONFIRM_REQUIRED", "Confirm cancellation. History is kept.", body.requestId));
       return { data: { status: "CANCELLED" }, session: { ...session, status: "CANCELLED" } };
+    },
+  });
+}
+
+/** Permanently delete a session and related attendance, assignments, overrides, and audit rows. */
+export async function deleteSession(
+  actor: Actor,
+  sessionId: string,
+  body: { requestId: string; expectedRevision: number; confirm: true },
+): Promise<ServiceResult<{ deleted: true; sessionId: string }>> {
+  if (!can(actor.role, "deleteSession")) return fail(403, "FORBIDDEN", "Your account cannot delete a session.", body.requestId);
+  if (!body.confirm) return fail(400, "CONFIRM_REQUIRED", "Confirm permanent delete. This cannot be undone.", body.requestId);
+  return withWrite({
+    actor,
+    action: "deleteSession",
+    sessionId,
+    expectedRevision: body.expectedRevision,
+    requestId: body.requestId,
+    eventType: "session.delete",
+    run: async ({ repo, session }) => {
+      if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      await repo.deleteSessionCascade(sessionId);
+      return {
+        data: { deleted: true as const, sessionId },
+        auditSessionId: "sessions",
+      };
     },
   });
 }

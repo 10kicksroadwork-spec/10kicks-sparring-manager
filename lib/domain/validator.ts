@@ -1,7 +1,9 @@
+import { isContiguousLeftPack } from "./location-packing";
 import { evaluatePair } from "./matchmaking";
 import {
   LOCATIONS,
   countsAsHardSession,
+  locationLabel,
   locationsForFighterCount,
   scheduledFighterCount,
   type Assignment,
@@ -12,6 +14,7 @@ import {
 } from "./types";
 import { diagnostic } from "./diagnostics";
 import { isReadyForHardMatch, SKILL_MAX, SKILL_MIN } from "./profile";
+import { reuseWasAvoidable, volunteersInMultipleHardBlocks } from "./volunteer-load";
 
 const LOCATION_SET = new Set<string>(LOCATIONS);
 
@@ -176,7 +179,7 @@ export function validateSchedule(
     for (const assignment of group) {
       if (locations.has(assignment.location)) {
         errors.push(
-          diagnostic("BLOCK_CAPACITY_EXCEEDED", `Block ${blockIndex} uses ${assignment.location} more than once.`, {
+          diagnostic("BLOCK_CAPACITY_EXCEEDED", `Block ${blockIndex} uses ${locationLabel(assignment.location)} more than once.`, {
             blockIndex,
             location: assignment.location,
           }),
@@ -195,6 +198,16 @@ export function validateSchedule(
         }
         people.add(personId);
       }
+    }
+    // Full cards must pack left: Main → Back Mat → Front Mat (no open higher-priority slot).
+    if (mode === "full" && group.length > 0 && !isContiguousLeftPack(locations, mats)) {
+      errors.push(
+        diagnostic(
+          "LOCATION_PACKING_HOLE",
+          `Block ${blockIndex} leaves a higher-priority mat open. Pack matches left: ${mats.map(locationLabel).join(" → ")}.`,
+          { blockIndex, details: { locations: [...locations].join(",") } },
+        ),
+      );
     }
   }
 
@@ -230,19 +243,12 @@ export function validateSchedule(
         }),
       );
     }
-    const locations = counting.map((a) => a.location);
-    const allowRepeat = mats.length < input.requiredHardSessions;
-    if (!allowRepeat && new Set(locations).size !== locations.length) {
-      errors.push(
-        diagnostic("LOCATION_COVERAGE_CONFLICT", `${fighter.displayName} is scheduled in the same location more than once.`, {
-          fighterId: fighter.athleteId,
-        }),
-      );
-    }
+    // Location variety is soft: packing + short cards may repeat Main / mats.
+    // Still reject mats outside this Saturday's venue pool (e.g. Front Mat under 5).
     for (const assignment of counting) {
       if (!mats.includes(assignment.location) && !fixedIds.has(assignment.assignmentId)) {
         errors.push(
-          diagnostic("LOCATION_COVERAGE_CONFLICT", `${fighter.displayName} is on ${assignment.location}, which is not used with ${scheduledFighterCount(input)} fighters.`, {
+          diagnostic("LOCATION_COVERAGE_CONFLICT", `${fighter.displayName} is on ${locationLabel(assignment.location)}, which is not used with ${scheduledFighterCount(input)} fighters.`, {
             fighterId: fighter.athleteId,
             location: assignment.location,
           }),
@@ -257,26 +263,14 @@ export function validateSchedule(
         }),
       );
     }
-    if (mode === "full") {
-      if (counting.length !== input.requiredHardSessions) {
-        errors.push(
-          diagnostic(
-            "SESSION_COUNT",
-            `${fighter.displayName} has ${counting.length} hard sessions. A full Saturday rundown needs exactly ${input.requiredHardSessions}.`,
-            { fighterId: fighter.athleteId, details: { count: counting.length, required: input.requiredHardSessions } },
-          ),
-        );
-      }
-      const missing = allowRepeat ? [] : mats.filter((location) => !locations.includes(location));
-      if (counting.length === input.requiredHardSessions && missing.length > 0) {
-        errors.push(
-          diagnostic(
-            "LOCATION_COVERAGE_CONFLICT",
-            `${fighter.displayName} is missing ${missing.join(", ")}. Each fighter spars once in the main ring, floor 1, and floor 2.`,
-            { fighterId: fighter.athleteId },
-          ),
-        );
-      }
+    if (mode === "full" && counting.length !== input.requiredHardSessions) {
+      errors.push(
+        diagnostic(
+          "SESSION_COUNT",
+          `${fighter.displayName} has ${counting.length} hard sessions. A full Saturday rundown needs exactly ${input.requiredHardSessions}.`,
+          { fighterId: fighter.athleteId, details: { count: counting.length, required: input.requiredHardSessions } },
+        ),
+      );
     }
 
     for (const assignment of counting) {
@@ -334,6 +328,22 @@ export function validateSchedule(
         diagnostic("VOLUNTEER_SAME_FIGHTER", `${volunteer.displayName} is paired with the same fighter more than once.`, {
           volunteerId: volunteer.athleteId,
         }),
+      );
+    }
+  }
+
+  // Coach swaps may still place someone in a second block; warn only when the pool was large enough to avoid it.
+  if (mode === "full" && reuseWasAvoidable(input, assignments)) {
+    const multi = volunteersInMultipleHardBlocks(assignments, (id) => {
+      return input.volunteers.find((volunteer) => volunteer.athleteId === id)?.displayName ?? id;
+    });
+    for (const row of multi) {
+      warnings.push(
+        diagnostic(
+          "VOLUNTEER_REUSE_WHEN_AVOIDABLE",
+          `${row.displayName} is in more than one block even though enough volunteers were available for single-block use.`,
+          { volunteerId: row.volunteerId, details: { blocks: row.blocks.join(",") } },
+        ),
       );
     }
   }

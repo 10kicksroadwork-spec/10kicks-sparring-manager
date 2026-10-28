@@ -17,9 +17,4 @@ export function newRequestId(): string {
   return crypto.randomUUID();
 }
 
-export function locationLabel(location: string): string {
-  if (location === "MAIN_RING") return "Main ring";
-  if (location === "FLOOR_1") return "Floor 1";
-  if (location === "FLOOR_2") return "Floor 2";
-  return location;
-}
+export { locationLabel } from "@/lib/domain/types";

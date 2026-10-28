@@ -54,6 +54,8 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
 
   await page.goto("/dashboard");
   await expect(page.getByTestId("start-saturday")).toBeVisible();
+  await expect(page.getByTestId("resume-saturday")).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Previous Sessions" })).toHaveCount(0);
   const startBox = await page.getByTestId("start-saturday").boundingBox();
   expect(startBox?.height ?? 0).toBeGreaterThanOrEqual(44);
   await noHorizontalOverflow(page);
@@ -62,6 +64,11 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await expect(page).toHaveURL(/\/attendance/);
   const attendanceUrl = page.url();
   await expect(page.getByText(/revision [1-9]/)).toBeVisible();
+  const previous = page.getByTestId("previous-sessions");
+  await expect(previous).toBeVisible();
+  await expect(previous).not.toHaveAttribute("open", "");
+  await previous.locator("summary").click();
+  await expect(previous).toHaveAttribute("open", "");
 
   const boxes = page.locator('input[type="checkbox"]');
   const count = await boxes.count();
@@ -91,6 +98,8 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await lock.click();
   await expect(page.getByTestId(lockId ?? "")).toHaveText("Unlock match");
   await page.getByTestId("complete-block-1").click();
+  await expect(page.getByTestId("block-1")).toHaveAttribute("data-complete", "true");
+  await expect(page.getByTestId("block-complete-label-1")).toHaveText("Completed");
   await expect(page.getByTestId("block-1")).toContainText("Completed · both rounds");
   const completed = await page.getByTestId("block-1").innerText();
   const lockedArticle = page.getByTestId(lockId ?? "").locator("xpath=ancestor::article");

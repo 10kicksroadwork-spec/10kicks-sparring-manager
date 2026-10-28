@@ -66,7 +66,7 @@ export function parseSettings(raw: string): { settings: SaturdaySettings } | { e
         timing: { ...defaults.timing, ...(value.timing ?? {}) },
         requiredHardSessionsPerFighter: 3,
         hardRoundsPerSession: 2,
-        maxVolunteerHardSessions: 2,
+        maxVolunteerHardSessions: 3,
         restGapBlocks: 1,
         locations: defaults.locations,
       },

@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
 import { api, newRequestId } from "@/components/common/client";
+import { saturdaySessionCta } from "@/lib/ui/saturday-nav";
 
 type Bootstrap = {
   actor: { email: string; role: string };
   activeSessionId: string | null;
   athleteCount: number;
-  sessions: { sessionId: string; dateLocal: string; status: string; revision: number }[];
   corrupt: string[];
   integrations: { supabase: string; lock: string; auth: string; store: string };
 };
@@ -46,6 +46,8 @@ export default function DashboardPage() {
     router.push(`/sessions/${result.data.session.sessionId}/attendance`);
   }
 
+  const cta = data ? saturdaySessionCta(data.activeSessionId) : null;
+
   return (
     <Shell>
       <p className="text-sm uppercase tracking-[0.16em] text-[var(--gold)]">Coach desk</p>
@@ -60,26 +62,18 @@ export default function DashboardPage() {
       {data?.corrupt.length ? <p className="banner mt-4" role="alert">Some roster rows look corrupt and were skipped. {data.corrupt[0]}</p> : null}
       {error ? <p className="banner mt-4" role="alert">{error}</p> : null}
       <div className="mt-6 grid gap-3">
-        {data?.activeSessionId ? (
-          <a className="tap tap-gold h-14 text-lg" href={`/sessions/${data.activeSessionId}/attendance`}>Resume Saturday</a>
-        ) : null}
-        <button className="tap h-14 text-lg" type="button" onClick={() => void startSaturday()} disabled={busy} data-testid="start-saturday">
-          {busy ? "Starting…" : "Start Saturday session"}
-        </button>
+        {!cta ? (
+          <button className="tap tap-gold h-14 text-lg" type="button" disabled data-testid="session-cta-loading">Loading…</button>
+        ) : cta.kind === "resume" ? (
+          <a className="tap tap-gold h-14 text-lg" href={`/sessions/${cta.sessionId}/attendance`} data-testid="resume-saturday">
+            {cta.label}
+          </a>
+        ) : (
+          <button className="tap tap-gold h-14 text-lg" type="button" onClick={() => void startSaturday()} disabled={busy} data-testid="start-saturday">
+            {busy ? "Starting…" : cta.label}
+          </button>
+        )}
       </div>
-      <section className="mt-8">
-        <h2 className="font-display text-3xl">Previous sessions</h2>
-        <ul className="mt-3 grid gap-2">
-          {(data?.sessions ?? []).map((session) => (
-            <li key={session.sessionId}>
-              <a className="card block min-h-11" href={`/sessions/${session.sessionId}/rundown`}>
-                <span className="font-semibold">{session.dateLocal}</span>
-                <span className="ml-2 text-[var(--muted)]">{session.status} · rev {session.revision}</span>
-              </a>
-            </li>
-          ))}
-        </ul>
-      </section>
     </Shell>
   );
 }

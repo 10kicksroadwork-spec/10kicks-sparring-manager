@@ -31,7 +31,7 @@ Status is what was verified in this workspace on 25 October 2026. A gate is not 
 
 - [x] Backtracking search, shortest horizon, rest gap, location uniqueness, volunteer cap
 - [x] Timeout is `TIME_BUDGET_EXHAUSTED`, not unsatisfiable
-- [x] Gate: 5 fighters and 15 compatible volunteers solve in 6 blocks; a forced 5-block horizon is unsatisfiable
+- [x] Gate: 5 fighters and 15 compatible volunteers solve in ~6 blocks with hard prefix packing (location repeats allowed when needed); Block-4/Block-6 hole shapes rejected; single-block volunteers when the pool is large enough
 
 ## Phase E — Control and regeneration
 
