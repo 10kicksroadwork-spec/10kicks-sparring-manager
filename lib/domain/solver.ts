@@ -1,9 +1,17 @@
 import { diagnostic } from "./diagnostics";
+import {
+  compactScheduleBlocksToPrefix,
+  filterPrefixPlans,
+  isContiguousLeftPack,
+  sortPlansByLeftPack,
+} from "./location-packing";
 import { evaluatePair } from "./matchmaking";
 import { pairCompatibility, scoreSchedule } from "./scoring";
 import { validateSchedule } from "./validator";
+import { canCoverWithoutVolunteerReuse } from "./volunteer-load";
 import {
   countsAsHardSession,
+  locationLabel,
   locationsForFighterCount,
   scheduledFighterCount,
   type Assignment,
@@ -60,40 +68,49 @@ export function solveSchedule(input: ScheduleInput, options: SolveOptions): Solv
 
   const lower = lowerBound(input, prep);
   const maxH = Math.max(lower, input.maxBlockHorizon);
-  let smallerExhausted = true;
+  const preferSingleBlock = canCoverWithoutVolunteerReuse(input);
+  const volunteerCaps = preferSingleBlock
+    ? [1, input.maxVolunteerSessions]
+    : [input.maxVolunteerSessions];
 
-  for (let horizon = lower; horizon <= maxH; horizon += 1) {
-    if (Date.now() >= deadline) {
-      return timeoutResult(smallerExhausted ? undefined : undefined);
-    }
-    const found = searchHorizon(input, prep, horizon, deadline);
-    if (found.timedOut) {
-      return timeoutResult(found.assignments);
-    }
-    if (found.assignments) {
-      const validation = validateSchedule(input, found.assignments);
-      if (!validation.ok) {
-        return {
-          status: "UNSAT",
-          diagnostics: [
-            diagnostic(
-              "SOLVER_REJECTED_CANDIDATE",
-              "The search built a lineup that failed the independent validator, so nothing was published. This is not proof the session is impossible.",
-            ),
-            ...validation.errors,
-          ],
-        };
+  for (const volunteerCap of volunteerCaps) {
+    let smallerExhausted = true;
+    for (let horizon = lower; horizon <= maxH; horizon += 1) {
+      if (Date.now() >= deadline) {
+        return timeoutResult(undefined);
       }
-      const optimality = smallerExhausted ? "PROVEN" : "NOT_PROVEN";
-      const notes = validation.warnings.map((w) => w.message);
-      if (optimality === "PROVEN") {
-        notes.unshift("Minimum block count for this attendance was proven. The matchup score is the first deterministic valid lineup, not a clinical ranking.");
-      } else {
-        notes.unshift("Valid schedule — not proven shortest.");
+      const found = searchHorizon(input, prep, horizon, deadline, volunteerCap);
+      if (found.timedOut) {
+        return timeoutResult(found.assignments);
       }
-      return feasible(input, found.assignments, optimality, notes);
+      if (found.assignments) {
+        const pool = locationsForFighterCount(scheduledFighterCount(input));
+        // Packing may repeat locations; compaction is allowed to remapping freely.
+        const packed = compactScheduleBlocksToPrefix(found.assignments, pool, true);
+        const validation = validateSchedule(input, packed);
+        if (!validation.ok) {
+          return {
+            status: "UNSAT",
+            diagnostics: [
+              diagnostic(
+                "SOLVER_REJECTED_CANDIDATE",
+                "The search built a lineup that failed the independent validator, so nothing was published. This is not proof the session is impossible.",
+              ),
+              ...validation.errors,
+            ],
+          };
+        }
+        const optimality = smallerExhausted ? "PROVEN" : "NOT_PROVEN";
+        const notes = validation.warnings.map((w) => w.message);
+        if (optimality === "PROVEN") {
+          notes.unshift("Minimum block count for this attendance was proven. The matchup score is the first deterministic valid lineup, not a clinical ranking.");
+        } else {
+          notes.unshift("Valid schedule — not proven shortest.");
+        }
+        return feasible(input, packed, optimality, notes);
+      }
+      smallerExhausted = true;
     }
-    smallerExhausted = true;
   }
 
   return {
@@ -202,6 +219,7 @@ function prepare(input: ScheduleInput): Prep {
       "EXPLICIT_EXCLUSION",
       "VOLUNTEER_MAX_EXCEEDED",
       "LOCATION_COVERAGE_CONFLICT",
+      "LOCATION_PACKING_HOLE",
       "DUPLICATE_PAIRING",
       "VOLUNTEER_SAME_FIGHTER",
       "SESSION_COUNT",
@@ -293,12 +311,15 @@ function volunteerLoad(input: ScheduleInput, volunteerId: string): number {
 
 function locationPhrase(input: ScheduleInput): string {
   const count = locationsForFighterCount(scheduledFighterCount(input)).length;
-  return count < 3 ? "two locations (main ring and floor 1)" : "three locations";
+  return count < 3
+    ? `two locations (${locationLabel("MAIN_RING")} and ${locationLabel("FLOOR_1")})`
+    : "three locations";
 }
 
 function lowerBound(input: ScheduleInput, prep: Prep): number {
+  const mats = locationsForFighterCount(scheduledFighterCount(input)).length;
   const totalSessions = input.fighters.length * input.requiredHardSessions;
-  const capacityBound = Math.ceil(totalSessions / locationsForFighterCount(scheduledFighterCount(input)).length);
+  const capacityBound = Math.ceil(totalSessions / mats);
   const spacingBound = 1 + (input.requiredHardSessions - 1) * (input.restGapBlocks + 1);
   const fixedMax = input.fixedAssignments.reduce((max, a) => Math.max(max, a.blockIndex), 0);
   const basic = Math.max(capacityBound, input.requiredHardSessions === 3 ? 5 : spacingBound);
@@ -326,37 +347,42 @@ function blockPatterns(horizon: number, count: number, restGap: number): number[
   return out;
 }
 
-function locationPlans(openBlocks: number[], pool: Location[], used: Set<Location>, allowRepeat: boolean): Location[][] {
-  if (!allowRepeat) {
-    const open = pool.filter((location) => !used.has(location));
-    if (open.length !== openBlocks.length) return [];
-    return permutations(open);
-  }
+/**
+ * Location plans for one block's open fighters. Hard-filters to pool-prefix
+ * packs (Main → Back Mat → Front Mat). Location repeats are allowed so short
+ * cards can still pack; plans that avoid repeats are tried first.
+ */
+function blockLocationPlans(
+  fighters: string[],
+  pool: Location[],
+  usedLoc: Map<string, Set<Location>>,
+  blockMask: number,
+): Location[][] {
+  if (fighters.length === 0) return [[]];
   const plans: Location[][] = [];
-  const walk = (index: number, current: Location[]) => {
-    if (index === openBlocks.length) {
+  const walk = (index: number, current: Location[], mask: number) => {
+    if (index === fighters.length) {
       plans.push(current.slice());
       return;
     }
     for (const location of pool) {
+      if ((mask & LOCATION_BIT[location]) !== 0) continue;
+      if ((blockMask & LOCATION_BIT[location]) !== 0) continue;
       current.push(location);
-      walk(index + 1, current);
+      walk(index + 1, current, mask | LOCATION_BIT[location]);
       current.pop();
     }
   };
-  walk(0, []);
-  plans.sort((a, b) => new Set(b).size - new Set(a).size || a.join().localeCompare(b.join()));
-  return plans;
-}
-
-function permutations<T>(items: T[]): T[][] {
-  if (items.length <= 1) return [items.slice()];
-  const out: T[][] = [];
-  for (let i = 0; i < items.length; i += 1) {
-    const rest = items.slice(0, i).concat(items.slice(i + 1));
-    for (const perm of permutations(rest)) out.push([items[i], ...perm]);
+  walk(0, [], 0);
+  const fixed: Location[] = [];
+  for (const location of pool) {
+    if (blockMask & LOCATION_BIT[location]) fixed.push(location);
   }
-  return out;
+  const repeatCost = (plan: Location[]) =>
+    plan.reduce((total, location, index) => {
+      return total + (usedLoc.get(fighters[index])?.has(location) ? 1 : 0);
+    }, 0);
+  return filterPrefixPlans(sortPlansByLeftPack(plans, pool, fixed, repeatCost), pool, fixed);
 }
 
 function searchHorizon(
@@ -364,6 +390,7 @@ function searchHorizon(
   prep: Prep,
   horizon: number,
   deadline: number,
+  volunteerCap: number,
 ): { assignments?: Assignment[]; timedOut: boolean } {
   const patterns = blockPatterns(horizon, input.requiredHardSessions, input.restGapBlocks);
   const patternOptions = new Map<string, number[][]>();
@@ -452,7 +479,7 @@ function searchHorizon(
       return undefined;
     }
     if (index === order.length) {
-      return assignLocations(input, prep, chosen, order, blockLocMask, blockPeople, deadline, () => {
+      return assignLocations(input, prep, chosen, order, blockLocMask, blockPeople, deadline, volunteerCap, () => {
         timedOut = true;
       });
     }
@@ -492,66 +519,118 @@ function assignLocations(
   blockLocMask: number[],
   blockPeople: Map<number, Set<string>>,
   deadline: number,
+  volunteerCap: number,
   markTimeout: () => void,
 ): Assignment[] | undefined {
+  const pool = locationsForFighterCount(scheduledFighterCount(input));
   const placed = new Map<string, Map<number, Location>>();
-  const byId = new Map(input.fighters.map((fighter) => [fighter.athleteId, fighter]));
+  const usedLoc = new Map<string, Set<Location>>();
 
-  const walk = (index: number): Assignment[] | undefined => {
+  for (const fighter of input.fighters) {
+    const fixed = (prep.fixedByFighter.get(fighter.athleteId) ?? []).filter((a) => countsAsHardSession(a.status));
+    const mapping = new Map<number, Location>(fixed.map((a) => [a.blockIndex, a.location]));
+    placed.set(fighter.athleteId, mapping);
+    usedLoc.set(fighter.athleteId, new Set(mapping.values()));
+  }
+
+  const blockFighters = new Map<number, string[]>();
+  for (const [fighterId, pattern] of patterns) {
+    for (const block of pattern) {
+      if (placed.get(fighterId)?.has(block)) continue;
+      const list = blockFighters.get(block) ?? [];
+      list.push(fighterId);
+      blockFighters.set(block, list);
+    }
+  }
+  for (const [block, list] of blockFighters) {
+    list.sort((a, b) => {
+      const orderGap = fighterOrder.indexOf(a) - fighterOrder.indexOf(b);
+      return orderGap !== 0 ? orderGap : a.localeCompare(b);
+    });
+    blockFighters.set(block, list);
+  }
+  const blocks = [...blockFighters.keys()].sort((a, b) => a - b);
+
+  const walk = (blockIndex: number): Assignment[] | undefined => {
     if (Date.now() >= deadline) {
       markTimeout();
       return undefined;
     }
-    if (index === fighterOrder.length) {
-      return assignVolunteers(input, prep, placed, blockPeople, deadline, markTimeout);
+    if (blockIndex === blocks.length) {
+      if (!placedBlocksArePrefixPacked(placed, pool)) return undefined;
+      return assignVolunteers(input, prep, placed, blockPeople, deadline, volunteerCap, markTimeout);
     }
-    const fighter = byId.get(fighterOrder[index]);
-    if (!fighter) return undefined;
-    const pattern = patterns.get(fighter.athleteId) ?? [];
-    const fixed = (prep.fixedByFighter.get(fighter.athleteId) ?? []).filter((a) => countsAsHardSession(a.status));
-    const fixedLoc = new Map<number, Location>(fixed.map((a) => [a.blockIndex, a.location]));
-    const openBlocks = pattern.filter((block) => !fixedLoc.has(block));
-    const used = new Set(fixedLoc.values());
-    if (openBlocks.length === 0) {
-      placed.set(fighter.athleteId, new Map(fixedLoc));
-      const done = walk(index + 1);
-      placed.delete(fighter.athleteId);
-      return done;
-    }
-    const pool = locationsForFighterCount(scheduledFighterCount(input));
-    const plans = locationPlans(openBlocks, pool, used, pool.length < input.requiredHardSessions);
-    if (plans.length === 0) return undefined;
-
-    const applyFresh = (fresh: Array<[number, Location]>, mapping: Map<number, Location>): boolean => {
-      for (const [block, location] of fresh) {
-        if (blockLocMask[block] & LOCATION_BIT[location]) return false;
+    const block = blocks[blockIndex];
+    const fighters = blockFighters.get(block) ?? [];
+    const refreshUsed = (fighterId: string) => {
+      usedLoc.set(fighterId, new Set(placed.get(fighterId)?.values() ?? []));
+    };
+    const undoApplied = (applied: Array<{ fighterId: string; location: Location }>) => {
+      for (const row of applied) {
+        blockLocMask[block] &= ~LOCATION_BIT[row.location];
+        placed.get(row.fighterId)?.delete(block);
+        refreshUsed(row.fighterId);
       }
-      for (const [block, location] of fresh) blockLocMask[block] |= LOCATION_BIT[location];
-      placed.set(fighter.athleteId, mapping);
-      return true;
     };
-    const undoFresh = (fresh: Array<[number, Location]>) => {
-      for (const [block, location] of fresh) blockLocMask[block] &= ~LOCATION_BIT[location];
-      placed.delete(fighter.athleteId);
-    };
-
+    // Location repeats allowed so ~6-block cards can still prefix-pack every block.
+    const plans = blockLocationPlans(fighters, pool, usedLoc, blockLocMask[block]);
     for (const plan of plans) {
-      const mapping = new Map(fixedLoc);
-      const fresh: Array<[number, Location]> = [];
-      openBlocks.forEach((block, i) => {
+      const applied: Array<{ fighterId: string; location: Location }> = [];
+      let ok = true;
+      for (let i = 0; i < fighters.length; i += 1) {
+        const fighterId = fighters[i];
         const location = plan[i];
-        mapping.set(block, location);
-        fresh.push([block, location]);
-      });
-      if (!applyFresh(fresh, mapping)) continue;
-      const done = walk(index + 1);
-      undoFresh(fresh);
+        if ((blockLocMask[block] & LOCATION_BIT[location]) !== 0) {
+          ok = false;
+          break;
+        }
+        blockLocMask[block] |= LOCATION_BIT[location];
+        placed.get(fighterId)?.set(block, location);
+        refreshUsed(fighterId);
+        applied.push({ fighterId, location });
+      }
+      if (!ok) {
+        undoApplied(applied);
+        continue;
+      }
+      // Refuse mid-search holes (Block 4: Main+Front / Block 6: Back+Front).
+      const blockLocs = [...placed.values()]
+        .map((mapping) => mapping.get(block))
+        .filter((location): location is Location => location !== undefined);
+      if (!isContiguousLeftPack(blockLocs, pool)) {
+        undoApplied(applied);
+        continue;
+      }
+      const done = walk(blockIndex + 1);
+      undoApplied(applied);
       if (done) return done;
+      if (Date.now() >= deadline) {
+        markTimeout();
+        return undefined;
+      }
     }
     return undefined;
   };
 
   return walk(0);
+}
+
+function placedBlocksArePrefixPacked(
+  placed: Map<string, Map<number, Location>>,
+  pool: Location[],
+): boolean {
+  const byBlock = new Map<number, Location[]>();
+  for (const mapping of placed.values()) {
+    for (const [block, location] of mapping) {
+      const list = byBlock.get(block) ?? [];
+      list.push(location);
+      byBlock.set(block, list);
+    }
+  }
+  for (const locations of byBlock.values()) {
+    if (!isContiguousLeftPack(locations, pool)) return false;
+  }
+  return true;
 }
 
 function assignVolunteers(
@@ -560,6 +639,7 @@ function assignVolunteers(
   placed: Map<string, Map<number, Location>>,
   blockPeople: Map<number, Set<string>>,
   deadline: number,
+  volunteerCap: number,
   markTimeout: () => void,
 ): Assignment[] | undefined {
   const athletes = new Map<string, SessionAthlete>();
@@ -604,6 +684,7 @@ function assignVolunteers(
   const open = slots.filter((slot) => !slot.fixedVolunteerId);
 
   const unavailable = new Set(input.unavailableIds ?? []);
+  const effectiveCap = Math.min(volunteerCap, input.maxVolunteerSessions);
   const candidatesFor = (slot: Slot): string[] => {
     const fighter = athletes.get(slot.fighterId);
     if (!fighter) return [];
@@ -611,7 +692,7 @@ function assignVolunteers(
     for (const volunteer of input.volunteers) {
       if (volunteer.athleteId === slot.fighterId) continue;
       if (unavailable.has(volunteer.athleteId)) continue;
-      if ((volCount.get(volunteer.athleteId) ?? 0) >= input.maxVolunteerSessions) continue;
+      if ((volCount.get(volunteer.athleteId) ?? 0) >= effectiveCap) continue;
       if (volFighters.get(volunteer.athleteId)?.has(slot.fighterId)) continue;
       if (blockPeople.get(slot.blockIndex)?.has(volunteer.athleteId)) continue;
       const blocks = volBlocks.get(volunteer.athleteId) ?? [];
@@ -653,7 +734,7 @@ function assignVolunteers(
     let capacity = 0;
     for (const volunteer of input.volunteers) {
       if (unavailable.has(volunteer.athleteId)) continue;
-      capacity += Math.max(0, input.maxVolunteerSessions - (volCount.get(volunteer.athleteId) ?? 0));
+      capacity += Math.max(0, effectiveCap - (volCount.get(volunteer.athleteId) ?? 0));
     }
     if (capacity < remaining.length) return false;
     const byFighter = new Map<string, number>();
@@ -666,7 +747,7 @@ function assignVolunteers(
         if (volunteer.athleteId === fighterId) continue;
         if (unavailable.has(volunteer.athleteId)) continue;
         if (volFighters.get(volunteer.athleteId)?.has(fighterId)) continue;
-        if ((volCount.get(volunteer.athleteId) ?? 0) >= input.maxVolunteerSessions) continue;
+        if ((volCount.get(volunteer.athleteId) ?? 0) >= effectiveCap) continue;
         const decision = evaluatePair({
           sessionId: input.sessionId,
           fighter,

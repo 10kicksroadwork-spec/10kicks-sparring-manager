@@ -7,12 +7,20 @@ import {
   PROPOSED_MATCH_LIMITS,
   countsAsCompletedTwoRoundSession,
   countsAsHardSession,
+  locationLabel,
   type Assignment,
   type NumericOverride,
   type ScheduleInput,
   type SessionAthlete,
 } from "@/lib/domain/types";
+import {
+  compactBlockToPrefix,
+  isContiguousLeftPack,
+  leftPackPenalty,
+  sortPlansByLeftPack,
+} from "@/lib/domain/location-packing";
 import { validateSchedule } from "@/lib/domain/validator";
+import { canCoverWithoutVolunteerReuse } from "@/lib/domain/volunteer-load";
 
 function athlete(id: string, weight = 160, skill = 3, aggression = 3): SessionAthlete {
   return { athleteId: id, displayName: id, weightLbs: weight, skill, aggression };
@@ -44,7 +52,7 @@ function demoInput(): ScheduleInput {
   });
 }
 
-function solve(schedule: ScheduleInput, ms = 8000, seed = 1) {
+function solve(schedule: ScheduleInput, ms = 15_000, seed = 1) {
   return solveSchedule(schedule, { maxComputeMs: ms, deterministicSeed: seed });
 }
 
@@ -102,10 +110,11 @@ describe("Saturday rules", () => {
     });
   });
 
-  it("schedules 5 fighters and 15 volunteers in 6 blocks and fails when forced to 5", () => {
+  it("schedules 5 fighters in ~6 blocks with prefix packing and one block per volunteer", () => {
     const full = solve(demoInput());
     expect(full.status).toBe("FEASIBLE");
     if (full.status !== "FEASIBLE") return;
+    // Short card + hard left-pack; location repeats allowed when packing needs them.
     expect(full.blockCount).toBe(6);
     expect(full.assignments).toHaveLength(15);
     expect(full.optimality).toBe("PROVEN");
@@ -116,12 +125,12 @@ describe("Saturday rules", () => {
       const mine = full.assignments.filter((a) => a.fighterId === fighterId);
       expect(mine).toHaveLength(3);
       expect(new Set(mine.map((a) => a.volunteerId)).size).toBe(3);
-      expect(new Set(mine.map((a) => a.location))).toEqual(new Set(LOCATIONS));
       const blocks = mine.map((a) => a.blockIndex).sort((a, b) => a - b);
       expect(blocks[1] - blocks[0]).toBeGreaterThanOrEqual(2);
       expect(blocks[2] - blocks[1]).toBeGreaterThanOrEqual(2);
     }
 
+    expect(canCoverWithoutVolunteerReuse(demoInput())).toBe(true);
     const byVolunteer = new Map<string, Assignment[]>();
     for (const assignment of full.assignments) {
       const list = byVolunteer.get(assignment.volunteerId) ?? [];
@@ -129,8 +138,18 @@ describe("Saturday rules", () => {
       byVolunteer.set(assignment.volunteerId, list);
     }
     for (const list of byVolunteer.values()) {
-      expect(list.length).toBeLessThanOrEqual(2);
+      // 15 volunteers cover 15 hard sessions — solver must not reuse anyone.
+      expect(list.length).toBe(1);
       expect(new Set(list.map((a) => a.fighterId)).size).toBe(list.length);
+    }
+
+    for (const block of new Set(full.assignments.map((row) => row.blockIndex))) {
+      const locs = full.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+      // No Block-4/6 holes: never Main+Front without Back, never Back+Front without Main.
+      const set = new Set(locs);
+      expect(set.has("MAIN_RING") && set.has("FLOOR_2") && !set.has("FLOOR_1")).toBe(false);
+      expect(set.has("FLOOR_1") && set.has("FLOOR_2") && !set.has("MAIN_RING")).toBe(false);
     }
 
     for (const assignment of full.assignments) {
@@ -165,10 +184,240 @@ describe("Saturday rules", () => {
     expect(new Set(result.assignments.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
     expect(result.assignments.some((row) => row.location === "FLOOR_2")).toBe(false);
     const byBlock = new Map<number, number>();
-    for (const row of result.assignments) byBlock.set(row.blockIndex, (byBlock.get(row.blockIndex) ?? 0) + 1);
-    for (const count of byBlock.values()) expect(count).toBeLessThanOrEqual(2);
+    for (const row of result.assignments) {
+      byBlock.set(row.blockIndex, (byBlock.get(row.blockIndex) ?? 0) + 1);
+    }
+    for (const [block, count] of byBlock) {
+      expect(count).toBeLessThanOrEqual(2);
+      const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(locs).toContain("MAIN_RING");
+    }
     expect(validateSchedule(schedule, result.assignments).ok).toBe(true);
   }, 20_000);
+
+  it("allows volunteer reuse up to 2 when the pool is too thin for single-block use", () => {
+    const schedule = input({
+      fighters: [1, 2, 3, 4, 5].map((n) => athlete(`f${n}`)),
+      volunteers: Array.from({ length: 10 }, (_, i) => athlete(`v${i + 1}`)),
+    });
+    expect(canCoverWithoutVolunteerReuse(schedule)).toBe(false);
+    const result = solve(schedule, 12_000);
+    expect(result.status).toBe("FEASIBLE");
+    if (result.status !== "FEASIBLE") return;
+    const byVolunteer = new Map<string, number>();
+    for (const row of result.assignments) {
+      byVolunteer.set(row.volunteerId, (byVolunteer.get(row.volunteerId) ?? 0) + 1);
+    }
+    expect(Math.max(...byVolunteer.values())).toBeGreaterThan(1);
+    expect(Math.max(...byVolunteer.values())).toBeLessThanOrEqual(2);
+    for (const block of new Set(result.assignments.map((row) => row.blockIndex))) {
+      const locs = result.assignments.filter((row) => row.blockIndex === block).map((row) => row.location);
+      expect(isContiguousLeftPack(locs, [...LOCATIONS])).toBe(true);
+    }
+  }, 20_000);
+
+  it("Block-4 shape: Main + Front with Back open is rejected and compacts to Main + Back", () => {
+    // Coach screenshot: Main filled | Back Open | Malachi on Front → Malachi to Back, Front Open.
+    expect(isContiguousLeftPack(["MAIN_RING", "FLOOR_2"], [...LOCATIONS])).toBe(false);
+    expect(leftPackPenalty(["MAIN_RING", "FLOOR_1"], [...LOCATIONS])).toBeLessThan(
+      leftPackPenalty(["MAIN_RING", "FLOOR_2"], [...LOCATIONS]),
+    );
+
+    const schedule = input({
+      fighters: [athlete("mason"), athlete("malachi")],
+      volunteers: [1, 2, 3, 4, 5, 6].map((n) => athlete(`v${n}`)),
+    });
+    const hole: Assignment[] = [
+      {
+        assignmentId: "b4-main",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 4,
+        location: "MAIN_RING",
+        fighterId: "mason",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "b4-front",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 4,
+        location: "FLOOR_2",
+        fighterId: "malachi",
+        volunteerId: "v2",
+        status: "PLANNED",
+        locked: false,
+      },
+    ];
+    expect(validateSchedule(schedule, hole, { mode: "full" }).errors.some((e) => e.code === "LOCATION_PACKING_HOLE")).toBe(
+      true,
+    );
+
+    // Lock Main so only the Front match shifts left onto Back Mat.
+    hole[0] = { ...hole[0], locked: true };
+    const compacted = compactBlockToPrefix(
+      hole,
+      [...LOCATIONS],
+      new Map([
+        ["mason", new Set()],
+        ["malachi", new Set()],
+      ]),
+      false,
+    );
+    expect(compacted).not.toBeNull();
+    expect(new Set(compacted!.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+    expect(compacted!.find((row) => row.fighterId === "mason")?.location).toBe("MAIN_RING");
+    expect(compacted!.find((row) => row.fighterId === "malachi")?.location).toBe("FLOOR_1");
+    expect(isContiguousLeftPack(compacted!.map((row) => row.location), [...LOCATIONS])).toBe(true);
+  });
+
+  it("Block-6 shape: Back + Front with Main open is rejected and compacts to Main + Back", () => {
+    // Coach screenshot: Main Open | Malachi Back | Mason Front → Malachi Main, Mason Back, Front Open.
+    expect(isContiguousLeftPack(["FLOOR_1", "FLOOR_2"], [...LOCATIONS])).toBe(false);
+    const ranked = sortPlansByLeftPack(
+      [
+        ["FLOOR_1", "FLOOR_2"],
+        ["MAIN_RING", "FLOOR_1"],
+        ["MAIN_RING", "FLOOR_2"],
+      ],
+      [...LOCATIONS],
+    );
+    expect(new Set(ranked[0])).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+
+    const schedule = input({
+      fighters: [athlete("malachi"), athlete("mason")],
+      volunteers: [1, 2, 3, 4, 5, 6].map((n) => athlete(`v${n}`)),
+    });
+    const hole: Assignment[] = [
+      {
+        assignmentId: "b6-back",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 6,
+        location: "FLOOR_1",
+        fighterId: "malachi",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "b6-front",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 6,
+        location: "FLOOR_2",
+        fighterId: "mason",
+        volunteerId: "v2",
+        status: "PLANNED",
+        locked: false,
+      },
+    ];
+    expect(validateSchedule(schedule, hole, { mode: "full" }).errors.some((e) => e.code === "LOCATION_PACKING_HOLE")).toBe(
+      true,
+    );
+
+    const compacted = compactBlockToPrefix(
+      hole,
+      [...LOCATIONS],
+      new Map([
+        ["malachi", new Set()],
+        ["mason", new Set()],
+      ]),
+      false,
+    );
+    expect(compacted).not.toBeNull();
+    expect(new Set(compacted!.map((row) => row.location))).toEqual(new Set(["MAIN_RING", "FLOOR_1"]));
+    expect(compacted!.some((row) => row.location === "FLOOR_2")).toBe(false);
+    expect(isContiguousLeftPack(compacted!.map((row) => row.location), [...LOCATIONS])).toBe(true);
+  });
+
+  it("warns when a volunteer is reused even though the pool was large enough", () => {
+    const schedule = input({
+      fighters: [athlete("f1"), athlete("f2")],
+      volunteers: [1, 2, 3, 4, 5, 6].map((n) => athlete(`v${n}`)),
+    });
+    const reused: Assignment[] = [
+      {
+        assignmentId: "a1",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 1,
+        location: "MAIN_RING",
+        fighterId: "f1",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a2",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 1,
+        location: "FLOOR_1",
+        fighterId: "f2",
+        volunteerId: "v2",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a3",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 3,
+        location: "FLOOR_1",
+        fighterId: "f1",
+        volunteerId: "v3",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a4",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 3,
+        location: "MAIN_RING",
+        fighterId: "f2",
+        volunteerId: "v1",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a5",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 5,
+        location: "MAIN_RING",
+        fighterId: "f1",
+        volunteerId: "v4",
+        status: "PLANNED",
+        locked: false,
+      },
+      {
+        assignmentId: "a6",
+        sessionId: "s1",
+        generationId: "g",
+        blockIndex: 5,
+        location: "FLOOR_1",
+        fighterId: "f2",
+        volunteerId: "v5",
+        status: "PLANNED",
+        locked: false,
+      },
+    ];
+    const validation = validateSchedule(schedule, reused);
+    expect(validation.ok).toBe(true);
+    expect(validation.warnings.some((w) => w.code === "VOLUNTEER_REUSE_WHEN_AVOIDABLE" && w.volunteerId === "v1")).toBe(
+      true,
+    );
+  });
+
+  it("labels FLOOR_1/FLOOR_2 as Back Mat and Front Mat for coaches", () => {
+    expect(locationLabel("MAIN_RING")).toBe("Main ring");
+    expect(locationLabel("FLOOR_1")).toBe("Back Mat");
+    expect(locationLabel("FLOOR_2")).toBe("Front Mat");
+  });
 
   it("does not count an interruption as a completed two-round session", () => {
     expect(HARD_ROUNDS_PER_ASSIGNMENT).toBe(2);
@@ -355,8 +604,8 @@ describe("Saturday rules", () => {
       assignmentId: "locked-2",
       sessionId: "s1",
       generationId: "g-old",
-      blockIndex: 2,
-      location: "FLOOR_1",
+      blockIndex: 3,
+      location: "MAIN_RING",
       fighterId: "f2",
       volunteerId: "v2",
       status: "PLANNED",

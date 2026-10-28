@@ -3,7 +3,15 @@
 export const LOCATIONS = ["MAIN_RING", "FLOOR_1", "FLOOR_2"] as const;
 export type Location = (typeof LOCATIONS)[number];
 
-/** Five or more fighters use the main ring and both floors. Fewer than five use the main ring and floor 1 only. */
+/** Coach-facing labels. Internal IDs stay MAIN_RING / FLOOR_1 / FLOOR_2. */
+export function locationLabel(location: string): string {
+  if (location === "MAIN_RING") return "Main ring";
+  if (location === "FLOOR_1") return "Back Mat";
+  if (location === "FLOOR_2") return "Front Mat";
+  return location;
+}
+
+/** Five or more fighters use the main ring plus Back Mat and Front Mat. Fewer than five use the main ring and Back Mat only. */
 export function locationsForFighterCount(fighterCount: number): Location[] {
   return fighterCount < 5 ? ["MAIN_RING", "FLOOR_1"] : [...LOCATIONS];
 }
@@ -124,6 +132,8 @@ export type ConflictCode =
   | "REST_SPACING_CONFLICT"
   | "VOLUNTEER_MAX_EXCEEDED"
   | "VOLUNTEER_SAME_FIGHTER"
+  | "VOLUNTEER_REUSE_WHEN_AVOIDABLE"
+  | "LOCATION_PACKING_HOLE"
   | "DUPLICATE_PAIRING"
   | "EXPLICIT_EXCLUSION"
   | "NUMERIC_LIMIT"

@@ -591,4 +591,124 @@ describe("session writes", () => {
     expect(await lock.acquire("session-1", "token-b", 5_000)).toBe(true);
     expect(getLockManager().mode).toBe("memory");
   });
+
+  it("swaps an eligible volunteer on a planned match and refuses invalid swaps", async () => {
+    const { patchAssignment } = await import("@/lib/services/schedule-service");
+    const session = await createSession(coach, { requestId: "req-swap-session", dateLocal: "2099-03-01" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    let revision = session.data.session.revision;
+    const fighters = [];
+    for (let i = 0; i < 5; i += 1) {
+      const created = await createAthlete(coach, { ...athleteBody(`Swap Fighter ${i}`), requestId: `req-sf-${i}` });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      fighters.push(created.data.athlete);
+      const checked = await putAttendance(coach, session.data.session.sessionId, {
+        requestId: `req-sf-in-${i}`,
+        expectedRevision: revision,
+        athleteId: created.data.athlete.athleteId,
+        assignedRole: "FIGHTER",
+        present: true,
+      });
+      expect(checked.ok).toBe(true);
+      if (!checked.ok) return;
+      revision = checked.revision ?? revision;
+    }
+    const volunteers = [];
+    for (let i = 0; i < 15; i += 1) {
+      const created = await createAthlete(coach, { ...athleteBody(`Swap Vol ${i}`), requestId: `req-sv-${i}` });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      volunteers.push(created.data.athlete);
+      const checked = await putAttendance(coach, session.data.session.sessionId, {
+        requestId: `req-sv-in-${i}`,
+        expectedRevision: revision,
+        athleteId: created.data.athlete.athleteId,
+        assignedRole: "VOLUNTEER",
+        present: true,
+      });
+      expect(checked.ok).toBe(true);
+      if (!checked.ok) return;
+      revision = checked.revision ?? revision;
+    }
+    const published = await generate(coach, session.data.session.sessionId, { requestId: "req-swap-gen", expectedRevision: revision });
+    expect(published.ok).toBe(true);
+    if (!published.ok) return;
+    const data = published.data as { published: boolean; assignments: { assignmentId: string; fighterId: string; volunteerId: string; blockIndex: number; status: string; locked: boolean }[] };
+    expect(data.published).toBe(true);
+    const target = data.assignments.find((row) => row.status === "PLANNED" && !row.locked);
+    expect(target).toBeTruthy();
+    if (!target) return;
+    const view = await getSession(coach, session.data.session.sessionId);
+    expect(view.ok).toBe(true);
+    if (!view.ok) return;
+    const options = view.data.swaps?.[target.assignmentId] ?? [];
+    expect(options.some((row) => row.current && row.volunteerId === target.volunteerId)).toBe(true);
+    const replacement = options.find((row) => !row.current);
+    expect(replacement).toBeTruthy();
+    if (!replacement) return;
+    const swapped = await patchAssignment(coach, session.data.session.sessionId, target.assignmentId, {
+      requestId: "req-swap-ok",
+      expectedRevision: view.revision ?? published.revision ?? revision,
+      action: "set-volunteer",
+      volunteerId: replacement.volunteerId,
+    });
+    expect(swapped.ok).toBe(true);
+    if (!swapped.ok) return;
+    expect(swapped.data.assignment.volunteerId).toBe(replacement.volunteerId);
+
+    const locked = await patchAssignment(coach, session.data.session.sessionId, target.assignmentId, {
+      requestId: "req-swap-lock",
+      expectedRevision: swapped.revision ?? 0,
+      action: "lock",
+    });
+    expect(locked.ok).toBe(true);
+    if (!locked.ok) return;
+    const refused = await patchAssignment(coach, session.data.session.sessionId, target.assignmentId, {
+      requestId: "req-swap-locked",
+      expectedRevision: locked.revision ?? 0,
+      action: "set-volunteer",
+      volunteerId: target.volunteerId,
+    });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.code).toBe("MATCH_LOCKED");
+  });
+
+  it("hard-deletes a previous session and related rows", async () => {
+    const { deleteSession } = await import("@/lib/services/session-service");
+    const session = await createSession(coach, { requestId: "req-del-session", dateLocal: "2099-04-01" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    const fighter = await createAthlete(coach, { ...athleteBody("Delete Fighter"), requestId: "req-del-f" });
+    expect(fighter.ok).toBe(true);
+    if (!fighter.ok) return;
+    const checked = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-del-in",
+      expectedRevision: session.data.session.revision,
+      athleteId: fighter.data.athlete.athleteId,
+      assignedRole: "FIGHTER",
+      present: true,
+    });
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    const removed = await deleteSession(coach, session.data.session.sessionId, {
+      requestId: "req-del-go",
+      expectedRevision: checked.revision ?? session.data.session.revision,
+      confirm: true,
+    });
+    expect(removed.ok).toBe(true);
+    if (!removed.ok) return;
+    expect(removed.data.deleted).toBe(true);
+    const gone = await getSession(coach, session.data.session.sessionId);
+    expect(gone.ok).toBe(false);
+    if (gone.ok) return;
+    expect(gone.code).toBe("NOT_FOUND");
+    const attendance = await getRepository().readAttendance(session.data.session.sessionId);
+    expect(attendance.rows).toHaveLength(0);
+    const assignments = await getRepository().readAssignments(session.data.session.sessionId);
+    expect(assignments.rows).toHaveLength(0);
+  });
 });
+

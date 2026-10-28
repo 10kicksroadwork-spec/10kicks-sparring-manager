@@ -97,5 +97,13 @@ export function createMemoryRepository(): SparringRepository {
       if (batch.override) current.overrides = upsert(current.overrides, batch.override, (row) => row.overrideId);
       current.audit = [...current.audit, batch.audit];
     },
+    async deleteSessionCascade(sessionId) {
+      const current = state();
+      current.sessions = current.sessions.filter((row) => row.sessionId !== sessionId);
+      current.attendance = (current.attendance ?? []).filter((row) => row.sessionId !== sessionId);
+      current.assignments = (current.assignments ?? []).filter((row) => row.sessionId !== sessionId);
+      current.overrides = current.overrides.filter((row) => row.sessionId !== sessionId);
+      current.audit = current.audit.filter((row) => row.sessionId !== sessionId);
+    },
   };
 }

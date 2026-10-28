@@ -61,6 +61,27 @@ a { color: inherit; }
   padding: 16px;
 }
 
+.card-complete {
+  background: #152019;
+  border-color: #3f6a52;
+  box-shadow: inset 0 0 0 1px rgba(183, 208, 190, 0.22);
+}
+
+.block-complete-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid #3f6a52;
+  background: rgba(183, 208, 190, 0.16);
+  color: var(--ok);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .field {
   width: 100%;
   min-height: 44px;
@@ -82,6 +103,32 @@ a { color: inherit; }
   background: #241f16;
   border: 1px solid var(--gold-dim);
   color: var(--text);
+}
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 1.25rem;
+  z-index: 40;
+  width: min(28rem, calc(100vw - 1.5rem));
+  transform: translateX(-50%);
+  border-radius: 14px;
+  padding: 12px 14px;
+  background: #2a2418;
+  border: 1px solid var(--gold);
+  color: var(--text);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+  animation: toast-in 160ms ease-out;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+
+.card-warn {
+  background: #241f16;
+  border-color: var(--gold-dim);
 }
 
 @media (prefers-reduced-motion: reduce) {
