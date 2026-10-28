@@ -3,10 +3,12 @@
 import { use, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
+import { NumericField } from "@/components/common/NumericField";
 import { api, newRequestId } from "@/components/common/client";
 import { partitionCheckIn } from "@/lib/domain/check-in-lists";
 import { isReadyForHardMatch } from "@/lib/domain/profile";
 import { rundownStarted } from "@/lib/domain/rundown";
+import { parseNumericDraft, validateRequiredNumericDraft } from "@/lib/ui/numeric-draft";
 
 type Athlete = { athleteId: string; displayName: string; weightLbs: number | null; skill: number | null; aggression: number | null; roleEligibility: string; active: boolean };
 type Attendance = { athleteId: string; displayName: string; assignedRole: "FIGHTER" | "VOLUNTEER"; present: boolean; availabilityStatus: string; weightLbsSnapshot: number; skillSnapshot: number; aggressionSnapshot: number | null };
@@ -163,6 +165,13 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
 
   async function addWalkIn(event: React.FormEvent) {
     event.preventDefault();
+    const validationError =
+      validateRequiredNumericDraft({ label: "a weight in pounds", draft: walkIn.weightLbs, min: 0.1, max: 500 }) ??
+      validateRequiredNumericDraft({ label: "a skill from 1 to 7", draft: walkIn.skill, min: 1, max: 7, integer: true });
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
     await chainRef.current;
     setBusy(true);
     setError("");
@@ -175,8 +184,8 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
         present: true,
         createVolunteer: {
           displayName: walkIn.displayName,
-          weightLbs: Number(walkIn.weightLbs),
-          skill: Number(walkIn.skill),
+          weightLbs: parseNumericDraft(walkIn.weightLbs),
+          skill: parseNumericDraft(walkIn.skill),
           roleEligibility: "VOLUNTEER",
         },
       }),
@@ -281,11 +290,11 @@ export default function AttendancePage({ params }: { params: Promise<{ sessionId
             );
           })}
         </ul>
-        <form className="card mt-3 grid gap-2" onSubmit={(event) => void addWalkIn(event)}>
+        <form className="card mt-3 grid gap-2" onSubmit={(event) => void addWalkIn(event)} noValidate>
           <h3 className="font-display text-2xl">Walk-in volunteer</h3>
           <input className="field" required aria-label="Walk-in name" placeholder="Name" value={walkIn.displayName} onChange={(event) => setWalkIn({ ...walkIn, displayName: event.target.value })} data-testid="walkin-name" />
-          <input className="field" required inputMode="decimal" aria-label="Walk-in weight" placeholder="Pounds" value={walkIn.weightLbs} onChange={(event) => setWalkIn({ ...walkIn, weightLbs: event.target.value })} data-testid="walkin-weight" />
-          <input className="field" aria-label="Walk-in skill" value={walkIn.skill} onChange={(event) => setWalkIn({ ...walkIn, skill: event.target.value })} />
+          <NumericField required allowDecimal inputMode="decimal" aria-label="Walk-in weight" placeholder="Pounds" value={walkIn.weightLbs} onChange={(weightLbs) => setWalkIn({ ...walkIn, weightLbs })} data-testid="walkin-weight" />
+          <NumericField aria-label="Walk-in skill" inputMode="numeric" min={1} max={7} value={walkIn.skill} onChange={(skill) => setWalkIn({ ...walkIn, skill })} />
           <button className="tap h-12" type="submit" disabled={busy} data-testid="add-volunteer">Add and check in</button>
         </form>
       </section>
