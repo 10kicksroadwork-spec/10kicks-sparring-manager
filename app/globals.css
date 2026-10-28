@@ -92,6 +92,58 @@ a { color: inherit; }
   padding: 0 12px;
 }
 
+/* Large mobile thumbs for Session Limits match sliders — values stay in page text, not popups. */
+.limit-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 48px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.limit-slider:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+
+.limit-slider::-webkit-slider-runnable-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #2a2a2a;
+  border: 1px solid var(--line);
+}
+
+.limit-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 32px;
+  height: 32px;
+  margin-top: -12px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 2px solid #1a1408;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
+.limit-slider::-moz-range-track {
+  height: 10px;
+  border-radius: 999px;
+  background: #2a2a2a;
+  border: 1px solid var(--line);
+}
+
+.limit-slider::-moz-range-thumb {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--gold);
+  border: 2px solid #1a1408;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+
 .roster-entry summary::-webkit-details-marker { display: none; }
 .roster-entry[open] .roster-chevron { transform: rotate(180deg); }
 .roster-chevron { display: inline-block; transition: transform 120ms ease; font-size: 1.25rem; }

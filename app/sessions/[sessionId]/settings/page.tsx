@@ -1,9 +1,14 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import { Shell } from "@/components/common/Shell";
 import { NumericField } from "@/components/common/NumericField";
 import { api, newRequestId } from "@/components/common/client";
+import {
+  explainSkillLimits,
+  explainWeightLimits,
+} from "@/lib/domain/limit-explanations";
+import type { MatchupFeasibility } from "@/lib/domain/matchup-feasibility";
 import {
   formatNumericDraft,
   parseNumericDraft,
@@ -19,47 +24,31 @@ type Limits = {
 type Timing = { roundMinutes: number; restSeconds: number };
 type Settings = { limits: Limits; timing: Timing };
 
-type SettingsDraft = {
-  maxWeightDifferenceLbs: string;
-  maxWeightDifferencePctOfLighterAthlete: string;
-  maxSkillDifference: string;
-  maxAggressionDifference: number;
+type AttendanceRow = {
+  athleteId: string;
+  displayName: string;
+  assignedRole: "FIGHTER" | "VOLUNTEER";
+  present: boolean;
+  weightLbsSnapshot: number;
+  skillSnapshot: number;
+};
+
+type TimingDraft = {
   roundMinutes: string;
   restSeconds: string;
 };
 
-function toDraft(settings: Settings): SettingsDraft {
-  return {
-    maxWeightDifferenceLbs: formatNumericDraft(settings.limits.maxWeightDifferenceLbs),
-    maxWeightDifferencePctOfLighterAthlete: formatNumericDraft(settings.limits.maxWeightDifferencePctOfLighterAthlete),
-    maxSkillDifference: formatNumericDraft(settings.limits.maxSkillDifference),
-    maxAggressionDifference: settings.limits.maxAggressionDifference,
-    roundMinutes: formatNumericDraft(settings.timing.roundMinutes),
-    restSeconds: formatNumericDraft(settings.timing.restSeconds),
-  };
+function snapHalf(value: number, min: number, max: number): number {
+  const clamped = Math.min(max, Math.max(min, value));
+  return Math.round(clamped * 2) / 2;
 }
 
-function validateDraft(draft: SettingsDraft): string | null {
+function snapInt(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function validateTiming(draft: TimingDraft): string | null {
   return (
-    validateRequiredNumericDraft({
-      label: "a maximum weight difference in pounds",
-      draft: draft.maxWeightDifferenceLbs,
-      min: 1,
-      max: 100,
-    }) ??
-    validateRequiredNumericDraft({
-      label: "a maximum weight difference percent",
-      draft: draft.maxWeightDifferencePctOfLighterAthlete,
-      min: 1,
-      max: 100,
-    }) ??
-    validateRequiredNumericDraft({
-      label: "a maximum skill difference",
-      draft: draft.maxSkillDifference,
-      min: 0,
-      max: 6,
-      integer: true,
-    }) ??
     validateRequiredNumericDraft({
       label: "a round duration in minutes",
       draft: draft.roundMinutes,
@@ -77,52 +66,125 @@ function validateDraft(draft: SettingsDraft): string | null {
   );
 }
 
-function draftToSettings(draft: SettingsDraft): Settings {
-  return {
-    limits: {
-      maxWeightDifferenceLbs: parseNumericDraft(draft.maxWeightDifferenceLbs)!,
-      maxWeightDifferencePctOfLighterAthlete: parseNumericDraft(draft.maxWeightDifferencePctOfLighterAthlete)!,
-      maxSkillDifference: parseNumericDraft(draft.maxSkillDifference)!,
-      maxAggressionDifference: draft.maxAggressionDifference,
-    },
-    timing: {
-      roundMinutes: parseNumericDraft(draft.roundMinutes)!,
-      restSeconds: parseNumericDraft(draft.restSeconds)!,
-    },
-  };
+function presentFighters(rows: AttendanceRow[]) {
+  return rows
+    .filter((row) => row.present && row.assignedRole === "FIGHTER")
+    .map((row) => ({
+      displayName: row.displayName,
+      weightLbs: row.weightLbsSnapshot,
+      skill: row.skillSnapshot,
+    }));
+}
+
+function feasibilityTone(status: MatchupFeasibility["status"]): string {
+  if (status === "ok") return "text-[var(--ok)]";
+  if (status === "impossible") return "text-[var(--danger)]";
+  return "text-[var(--muted)]";
 }
 
 export default function SettingsPage({ params }: { params: Promise<{ sessionId: string }> }) {
   const { sessionId } = use(params);
   const [revision, setRevision] = useState(0);
-  const [draft, setDraft] = useState<SettingsDraft | null>(null);
+  const [limits, setLimits] = useState<Limits | null>(null);
+  const [timingDraft, setTimingDraft] = useState<TimingDraft | null>(null);
+  const [fighters, setFighters] = useState<{ displayName: string; weightLbs: number; skill: number }[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [feasibility, setFeasibility] = useState<MatchupFeasibility | null>(null);
+  const [feasibilityLoading, setFeasibilityLoading] = useState(false);
+  const feasibilitySeq = useRef(0);
+  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const limitsRef = useRef<Limits | null>(null);
+
+  useEffect(() => {
+    limitsRef.current = limits;
+  }, [limits]);
 
   useEffect(() => {
     let ignore = false;
-    void api<{ session: { revision: number; settings: Settings } }>(`/api/sessions/${sessionId}`).then((result) => {
+    void api<{
+      session: { revision: number; settings: Settings };
+      attendance: AttendanceRow[];
+    }>(`/api/sessions/${sessionId}`).then((result) => {
       if (ignore) return;
       if (!result.ok) setError(result.error.message);
       else {
         setRevision(result.data.session.revision);
-        setDraft(toDraft(result.data.session.settings));
+        const nextLimits = result.data.session.settings.limits;
+        setLimits(nextLimits);
+        limitsRef.current = nextLimits;
+        setTimingDraft({
+          roundMinutes: formatNumericDraft(result.data.session.settings.timing.roundMinutes),
+          restSeconds: formatNumericDraft(result.data.session.settings.timing.restSeconds),
+        });
+        setFighters(presentFighters(result.data.attendance ?? []));
+        scheduleFeasibility(nextLimits);
       }
     });
-    return () => { ignore = true; };
+    return () => {
+      ignore = true;
+      if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  async function runFeasibility(nextLimits: Limits) {
+    const seq = ++feasibilitySeq.current;
+    setFeasibilityLoading(true);
+    const result = await api<{ feasibility: MatchupFeasibility }>(`/api/sessions/${sessionId}/feasibility`, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: newRequestId(),
+        limits: nextLimits,
+      }),
+    });
+    if (seq !== feasibilitySeq.current) return;
+    setFeasibilityLoading(false);
+    if (!result.ok) {
+      setFeasibility({
+        status: "inconclusive",
+        message: result.error.message || "Could not check matchup feasibility right now.",
+      });
+      return;
+    }
+    setFeasibility(result.data.feasibility);
+  }
+
+  function scheduleFeasibility(nextLimits: Limits) {
+    if (debounceTimer.current) clearTimeout(debounceTimer.current);
+    debounceTimer.current = setTimeout(() => {
+      void runFeasibility(nextLimits);
+    }, 280);
+  }
+
+  function patchLimit<K extends keyof Limits>(key: K, value: Limits[K]) {
+    if (!limits) return;
+    const next = { ...limits, [key]: value };
+    limitsRef.current = next;
+    setLimits(next);
+  }
+
+  function onLimitRelease() {
+    if (limitsRef.current) scheduleFeasibility(limitsRef.current);
+  }
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
-    if (!draft || saving) return;
-    const validationError = validateDraft(draft);
+    if (!limits || !timingDraft || saving) return;
+    const validationError = validateTiming(timingDraft);
     if (validationError) {
       setError(validationError);
       setNotice("");
       return;
     }
-    const settings = draftToSettings(draft);
+    const settings: Settings = {
+      limits,
+      timing: {
+        roundMinutes: parseNumericDraft(timingDraft.roundMinutes)!,
+        restSeconds: parseNumericDraft(timingDraft.restSeconds)!,
+      },
+    };
     setSaving(true);
     setError("");
     setNotice("");
@@ -143,6 +205,9 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
     }
   }
 
+  const weightExplanation = limits ? explainWeightLimits(fighters, limits) : null;
+  const skillExplanation = limits ? explainSkillLimits(fighters, limits) : null;
+
   return (
     <Shell>
       <a className="tap mb-3 inline-flex h-12 min-w-28" href={`/sessions/${sessionId}/attendance`} data-testid="back-to-attendance">
@@ -152,38 +217,116 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
       <p className="mt-2 text-[var(--muted)]">Settings for this Saturday session.</p>
       {error ? <p className="banner mt-3" role="alert">{error}</p> : null}
       {notice ? <p className="mt-3 text-[var(--ok)]" role="status">{notice}</p> : null}
-      {draft ? (
+      {limits && timingDraft ? (
         <form className="mt-5 grid gap-4" onSubmit={(event) => void save(event)} noValidate>
-          <fieldset className="card grid gap-3">
+          <fieldset className="card grid gap-5">
             <legend className="font-display text-2xl">Matching</legend>
-            <label>Maximum weight difference (lb)
-              <NumericField className="field mt-1" allowDecimal inputMode="decimal" min={1} max={100} step="0.5" required aria-label="Max weight gap pounds"
-                value={draft.maxWeightDifferenceLbs}
-                onChange={(maxWeightDifferenceLbs) => setDraft({ ...draft, maxWeightDifferenceLbs })} />
-            </label>
-            <label>Maximum weight difference (% of lighter person)
-              <NumericField className="field mt-1" allowDecimal inputMode="decimal" min={1} max={100} step="0.5" required aria-label="Max weight gap percent"
-                value={draft.maxWeightDifferencePctOfLighterAthlete}
-                onChange={(maxWeightDifferencePctOfLighterAthlete) => setDraft({ ...draft, maxWeightDifferencePctOfLighterAthlete })} />
-            </label>
-            <p className="text-sm text-[var(--muted)]">Both weight limits must pass. For example, 60 lb and 50% means a 120 lb person may be paired with someone at most 60 lb heavier.</p>
-            <label>Maximum skill difference
-              <NumericField className="field mt-1" inputMode="numeric" min={0} max={6} step={1} required aria-label="Max skill gap"
-                value={draft.maxSkillDifference}
-                onChange={(maxSkillDifference) => setDraft({ ...draft, maxSkillDifference })} />
-            </label>
+
+            <div className="grid gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor="max-weight-lbs" className="text-sm text-[var(--muted)]">Maximum weight difference (lb)</label>
+                <p className="font-display text-3xl leading-none tabular-nums" aria-live="polite" data-testid="weight-lbs-value">
+                  {limits.maxWeightDifferenceLbs}
+                </p>
+              </div>
+              <input
+                id="max-weight-lbs"
+                className="limit-slider"
+                type="range"
+                min={1}
+                max={100}
+                step={0.5}
+                value={limits.maxWeightDifferenceLbs}
+                aria-label="Max weight gap pounds"
+                onChange={(event) => patchLimit("maxWeightDifferenceLbs", snapHalf(Number(event.target.value), 1, 100))}
+                onPointerUp={onLimitRelease}
+                onTouchEnd={onLimitRelease}
+                onKeyUp={onLimitRelease}
+              />
+            </div>
+
+            <div className="grid gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor="max-weight-pct" className="text-sm text-[var(--muted)]">Maximum weight difference (% of lighter person)</label>
+                <p className="font-display text-3xl leading-none tabular-nums" aria-live="polite" data-testid="weight-pct-value">
+                  {limits.maxWeightDifferencePctOfLighterAthlete}
+                </p>
+              </div>
+              <input
+                id="max-weight-pct"
+                className="limit-slider"
+                type="range"
+                min={1}
+                max={100}
+                step={0.5}
+                value={limits.maxWeightDifferencePctOfLighterAthlete}
+                aria-label="Max weight gap percent"
+                onChange={(event) => patchLimit("maxWeightDifferencePctOfLighterAthlete", snapHalf(Number(event.target.value), 1, 100))}
+                onPointerUp={onLimitRelease}
+                onTouchEnd={onLimitRelease}
+                onKeyUp={onLimitRelease}
+              />
+            </div>
+
+            <p className="text-sm text-[var(--muted)]" data-testid="weight-explanation">
+              {weightExplanation?.text ?? "Check fighters in to see a live weight example from the lightest person present."}
+            </p>
+
+            <div className="grid gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <label htmlFor="max-skill-diff" className="text-sm text-[var(--muted)]">Maximum skill difference</label>
+                <p className="font-display text-3xl leading-none tabular-nums" aria-live="polite" data-testid="skill-diff-value">
+                  {limits.maxSkillDifference}
+                </p>
+              </div>
+              <input
+                id="max-skill-diff"
+                className="limit-slider"
+                type="range"
+                min={0}
+                max={6}
+                step={1}
+                value={limits.maxSkillDifference}
+                aria-label="Max skill gap"
+                onChange={(event) => patchLimit("maxSkillDifference", snapInt(Number(event.target.value), 0, 6))}
+                onPointerUp={onLimitRelease}
+                onTouchEnd={onLimitRelease}
+                onKeyUp={onLimitRelease}
+              />
+            </div>
+
+            <p className="text-sm text-[var(--muted)]" data-testid="skill-explanation">
+              {skillExplanation?.text ?? "Check fighters in to see a live skill band from the lowest-skill person present."}
+            </p>
           </fieldset>
+
+          <section className="card grid gap-2" aria-labelledby="matchup-feasibility-heading" data-testid="matchup-feasibility">
+            <h2 id="matchup-feasibility-heading" className="font-display text-2xl">Matchup feasibility</h2>
+            <p className="text-sm text-[var(--muted)]">
+              Uses the same scheduling rules as Generate. Suggestions do not save — use Save session settings when you want them.
+            </p>
+            {feasibilityLoading && !feasibility ? (
+              <p className="text-sm text-[var(--muted)]" role="status">Checking schedule…</p>
+            ) : null}
+            {feasibility ? (
+              <p className={`text-sm ${feasibilityTone(feasibility.status)}`} role="status" data-testid="feasibility-message">
+                {feasibilityLoading ? "Checking schedule… " : null}
+                {feasibility.message}
+              </p>
+            ) : null}
+          </section>
+
           <fieldset className="card grid gap-3">
             <legend className="font-display text-2xl">Round timing</legend>
             <label>Round duration (minutes)
               <NumericField className="field mt-1" allowDecimal inputMode="decimal" min={1} max={15} step={0.5} required aria-label="Round duration minutes"
-                value={draft.roundMinutes}
-                onChange={(roundMinutes) => setDraft({ ...draft, roundMinutes })} />
+                value={timingDraft.roundMinutes}
+                onChange={(roundMinutes) => setTimingDraft({ ...timingDraft, roundMinutes })} />
             </label>
             <label>Rest between rounds (seconds)
               <NumericField className="field mt-1" inputMode="numeric" min={0} max={300} step={1} required aria-label="Rest between rounds seconds"
-                value={draft.restSeconds}
-                onChange={(restSeconds) => setDraft({ ...draft, restSeconds })} />
+                value={timingDraft.restSeconds}
+                onChange={(restSeconds) => setTimingDraft({ ...timingDraft, restSeconds })} />
             </label>
             <p className="text-sm text-[var(--muted)]">The estimated session duration includes rest between blocks, but no rest after the last round. It excludes setup and delays.</p>
           </fieldset>

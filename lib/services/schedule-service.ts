@@ -1,10 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { eligibleVolunteersForAssignment, type EligibleVolunteerOption } from "@/lib/domain/eligible-volunteers";
 import { coachNextSteps } from "@/lib/domain/diagnostics";
+import { assessMatchupFeasibility, type MatchupFeasibility } from "@/lib/domain/matchup-feasibility";
 import { rundownStarted } from "@/lib/domain/rundown";
 import { compactScheduleBlocksToPrefix } from "@/lib/domain/location-packing";
 import { solveSchedule } from "@/lib/domain/solver";
-import { locationsForFighterCount, scheduledFighterCount, type Assignment, type Location, type SolveResult } from "@/lib/domain/types";
+import {
+  locationsForFighterCount,
+  scheduledFighterCount,
+  type Assignment,
+  type Location,
+  type MatchingLimits,
+  type SolveResult,
+} from "@/lib/domain/types";
 import { validateSchedule } from "@/lib/domain/validator";
 import type { StoredAssignment } from "@/lib/repository/types";
 import { activeAssignments, loadSession, toScheduleInput, viewSignature } from "./snapshot";
@@ -84,6 +92,33 @@ function rowsFrom(assignments: Assignment[], actorEmail: string, now: string, ge
 
 export async function generate(actor: Actor, sessionId: string, body: { requestId: string; expectedRevision: number }): Promise<ServiceResult<Record<string, unknown>>> {
   return persistSolve(actor, sessionId, body, "generate", false);
+}
+
+/**
+ * Preview whether draft matching limits can support a full schedule for current check-in.
+ * Does not save settings or publish a rundown.
+ */
+export async function checkMatchupFeasibility(
+  actor: Actor,
+  sessionId: string,
+  body: { requestId: string; limits: MatchingLimits },
+): Promise<ServiceResult<{ feasibility: MatchupFeasibility }>> {
+  if (!can(actor.role, "read")) return fail(403, "FORBIDDEN", "Your account cannot do that.", body.requestId);
+  const opened = await openStore(body.requestId);
+  if ("ok" in opened) return opened;
+  const view = await loadSession(opened.repo, sessionId);
+  if (!view) return fail(404, "NOT_FOUND", "That session does not exist.", body.requestId);
+  if (view.session.status === "CANCELLED") {
+    return fail(409, "SESSION_CANCELLED", "This session is cancelled.", body.requestId);
+  }
+  const scheduleInput = await toScheduleInput(opened.repo, view, "feasibility-preview", []);
+  const budget = Math.min(Math.max(view.session.settings.solverBudgetMs ?? 15_000, 1), 25_000);
+  const feasibility = assessMatchupFeasibility(scheduleInput, body.limits, {
+    maxComputeMs: Math.min(budget, 8_000),
+    probeComputeMs: Math.min(budget, 3_000),
+    deterministicSeed: seedFor(sessionId),
+  });
+  return { ok: true, data: { feasibility }, revision: view.session.revision, requestId: body.requestId };
 }
 
 async function persistSolve(

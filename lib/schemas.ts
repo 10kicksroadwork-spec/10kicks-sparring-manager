@@ -56,6 +56,12 @@ export const settingsSchema = z.object({
   timing: timingSchema,
 });
 
+/** Draft matching limits for Session Limits feasibility (does not save). */
+export const feasibilitySchema = z.object({
+  requestId: mutationMeta.requestId,
+  limits: limitsSchema,
+});
+
 export const attendancePutSchema = z.object({
   ...mutationMeta,
   athleteId: z.string().trim().min(1).optional(),
