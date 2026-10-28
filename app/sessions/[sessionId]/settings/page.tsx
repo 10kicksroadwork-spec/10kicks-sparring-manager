@@ -145,6 +145,9 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
 
   return (
     <Shell>
+      <a className="tap mb-3 inline-flex h-12 min-w-28" href={`/sessions/${sessionId}/attendance`} data-testid="back-to-attendance">
+        Back
+      </a>
       <h1 className="font-display text-5xl leading-none">Session limits</h1>
       <p className="mt-2 text-[var(--muted)]">Settings for this Saturday session.</p>
       {error ? <p className="banner mt-3" role="alert">{error}</p> : null}

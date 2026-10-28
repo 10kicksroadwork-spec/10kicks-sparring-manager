@@ -1,12 +1,22 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
 import { api, locationLabel, newRequestId } from "@/components/common/client";
 import { rundownStarted } from "@/lib/domain/rundown";
 import { estimateDuration, formatDuration, type RoundTiming } from "@/lib/domain/timing";
 import { locationsForFighterCount, type Location } from "@/lib/domain/types";
+import { isHistoricalRundownView, rundownBackHref } from "@/lib/ui/saturday-nav";
+
+function subscribeToUrl(onStoreChange: () => void) {
+  window.addEventListener("popstate", onStoreChange);
+  return () => window.removeEventListener("popstate", onStoreChange);
+}
+
+function fromAttendanceParam(): string | null {
+  return new URLSearchParams(window.location.search).get("from");
+}
 
 type Assignment = {
   assignmentId: string;
@@ -34,6 +44,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
+  const fromAttendance = useSyncExternalStore(subscribeToUrl, fromAttendanceParam, () => null);
 
   async function reload() {
     const result = await api<View>(`/api/sessions/${sessionId}`);
@@ -61,9 +72,15 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   const fighterCount = (view?.attendance ?? []).filter((person) => person.assignedRole === "FIGHTER" && person.availabilityStatus === "AVAILABLE").length;
   const usedLocations = new Set(view?.assignments.map((row) => row.location) ?? []);
   const columns = ALL_LOCATIONS.filter((location) => locationsForFighterCount(fighterCount).includes(location) || usedLocations.has(location));
-  const canDiscard = Boolean(view?.session.activeGenerationId) && !rundownStarted(view?.session.status ?? "", view?.assignments ?? []);
+  const readOnly = isHistoricalRundownView({
+    sessionStatus: view?.session.status,
+    fromAttendanceSessionId: fromAttendance,
+  });
+  const canDiscard = !readOnly && Boolean(view?.session.activeGenerationId) && !rundownStarted(view?.session.status ?? "", view?.assignments ?? []);
+  const backHref = rundownBackHref(sessionId, fromAttendance);
 
   async function act(path: string, body: Record<string, unknown>, method = "POST") {
+    if (readOnly) return;
     setBusy(true);
     setError("");
     const result = await api(path, { method, body: JSON.stringify({ requestId: newRequestId(), expectedRevision: revision, ...body }) });
@@ -74,6 +91,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   }
 
   async function discard() {
+    if (readOnly) return;
     setBusy(true);
     setError("");
     const result = await api<{ cleared: boolean }>(`/api/sessions/${sessionId}/unpublish`, {
@@ -90,6 +108,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   }
 
   async function regenerate() {
+    if (readOnly) return;
     setBusy(true);
     setError("");
     const result = await api<{ published: boolean; solve: { diagnostics?: { message: string }[]; nextSteps?: string[] } }>(`/api/sessions/${sessionId}/regenerate`, {
@@ -109,15 +128,15 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     <Shell>
       <div className="flex items-end justify-between gap-3">
         <div>
-          <h1 className="font-display text-5xl leading-none">Rundown</h1>
-          <p className="mt-2 text-[var(--muted)]">Revision {revision} · {view?.session.status ?? "…"} · {view?.session.updatedAt?.slice(11, 16) ?? ""}</p>
+          <h1 className="font-display text-5xl leading-none">{readOnly ? "Previous schedule" : "Rundown"}</h1>
+          <p className="mt-2 text-[var(--muted)]">Revision {revision} · {view?.session.status ?? "…"} · {view?.session.updatedAt?.slice(11, 16) ?? ""}{readOnly ? " · read-only" : ""}</p>
         </div>
         <a className="tap" href={`/sessions/${sessionId}/print`}>Print</a>
       </div>
       {error ? <p className="banner mt-3" role="alert">{error}</p> : null}
       {notice ? <p className="banner mt-3" role="status">{notice}</p> : null}
       {view?.corrupt.length ? <p className="banner mt-3" role="alert">{view.corrupt[0]}</p> : null}
-      {!view?.session.activeGenerationId ? <p className="mt-4">No rundown yet. <a className="underline" href={`/sessions/${sessionId}/attendance`}>Check in and generate.</a></p> : null}
+      {!view?.session.activeGenerationId ? <p className="mt-4">No rundown yet. <a className="underline" href={backHref}>Back to check-in</a></p> : null}
       {duration ? (
         <p className="mt-4 text-base" data-testid="session-duration">
           <strong>Estimated time: {formatDuration(duration.totalSeconds)}</strong>
@@ -133,7 +152,9 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
             <section key={block} className="card" data-testid={`block-${block}`}>
               <div className="flex items-center justify-between gap-2">
                 <h2 className="font-display text-3xl">Block {block}</h2>
-                <button className="tap" type="button" disabled={busy} data-testid={`complete-block-${block}`} onClick={() => void act(`/api/sessions/${sessionId}/blocks/${block}/complete`, { confirmBothRounds: true })}>Mark block complete</button>
+                {!readOnly ? (
+                  <button className="tap" type="button" disabled={busy} data-testid={`complete-block-${block}`} onClick={() => void act(`/api/sessions/${sessionId}/blocks/${block}/complete`, { confirmBothRounds: true })}>Mark block complete</button>
+                ) : null}
               </div>
               <div className="mt-3 grid gap-2">
                 {columns.map((location) => {
@@ -145,9 +166,11 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                         <>
                           <p className="text-lg"><span data-testid={`match-${match.assignmentId}`}>{name(match.fighterId)} / {name(match.volunteerId)}</span></p>
                           <p className="text-sm text-[var(--muted)]">{match.status === "COMPLETED" ? "Completed · both rounds" : match.status === "INTERRUPTED" ? "Interrupted · not a full session" : "Hard · 2 rounds"}{match.locked ? " · Locked" : ""}</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <button className="tap" type="button" disabled={busy} data-testid={`lock-${match.assignmentId}`} onClick={() => void act(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, { action: match.locked ? "unlock" : "lock" }, "PATCH")}>{match.locked ? "Unlock match" : "Lock match"}</button>
-                          </div>
+                          {!readOnly ? (
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              <button className="tap" type="button" disabled={busy} data-testid={`lock-${match.assignmentId}`} onClick={() => void act(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, { action: match.locked ? "unlock" : "lock" }, "PATCH")}>{match.locked ? "Unlock match" : "Lock match"}</button>
+                            </div>
+                          ) : null}
                         </>
                       ) : <p>Open</p>}
                     </article>
@@ -174,10 +197,10 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
         </ul>
       </section>
       <div className="mt-6 grid gap-2">
-        {canDiscard ? <button className="tap tap-gold h-14" type="button" disabled={busy} data-testid="discard-rundown" onClick={() => void discard()}>Discard rundown and return to check-in</button> : null}
-        <button className="tap h-14" type="button" disabled={busy} data-testid="regenerate" onClick={() => void regenerate()}>Regenerate unfinished</button>
-        <button className="tap h-12" type="button" disabled={busy} onClick={() => void act(`/api/sessions/${sessionId}/undo`, {})}>Undo last rundown</button>
-        <a className="tap h-12" href={`/sessions/${sessionId}/attendance`}>Back to check-in</a>
+        {!readOnly && canDiscard ? <button className="tap tap-gold h-14" type="button" disabled={busy} data-testid="discard-rundown" onClick={() => void discard()}>Discard rundown and return to check-in</button> : null}
+        {!readOnly ? <button className="tap h-14" type="button" disabled={busy} data-testid="regenerate" onClick={() => void regenerate()}>Regenerate unfinished</button> : null}
+        {!readOnly ? <button className="tap h-12" type="button" disabled={busy} onClick={() => void act(`/api/sessions/${sessionId}/undo`, {})}>Undo last rundown</button> : null}
+        <a className="tap h-12" href={backHref} data-testid="back-from-rundown">Back to check-in</a>
       </div>
     </Shell>
   );
