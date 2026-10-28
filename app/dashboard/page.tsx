@@ -46,7 +46,7 @@ export default function DashboardPage() {
     router.push(`/sessions/${result.data.session.sessionId}/attendance`);
   }
 
-  const cta = saturdaySessionCta(data?.activeSessionId ?? null);
+  const cta = data ? saturdaySessionCta(data.activeSessionId) : null;
 
   return (
     <Shell>
@@ -62,12 +62,14 @@ export default function DashboardPage() {
       {data?.corrupt.length ? <p className="banner mt-4" role="alert">Some roster rows look corrupt and were skipped. {data.corrupt[0]}</p> : null}
       {error ? <p className="banner mt-4" role="alert">{error}</p> : null}
       <div className="mt-6 grid gap-3">
-        {cta.kind === "resume" ? (
+        {!cta ? (
+          <button className="tap tap-gold h-14 text-lg" type="button" disabled data-testid="session-cta-loading">Loading…</button>
+        ) : cta.kind === "resume" ? (
           <a className="tap tap-gold h-14 text-lg" href={`/sessions/${cta.sessionId}/attendance`} data-testid="resume-saturday">
             {cta.label}
           </a>
         ) : (
-          <button className="tap tap-gold h-14 text-lg" type="button" onClick={() => void startSaturday()} disabled={busy || !data} data-testid="start-saturday">
+          <button className="tap tap-gold h-14 text-lg" type="button" onClick={() => void startSaturday()} disabled={busy} data-testid="start-saturday">
             {busy ? "Starting…" : cta.label}
           </button>
         )}
