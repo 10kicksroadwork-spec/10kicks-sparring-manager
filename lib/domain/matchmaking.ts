@@ -2,6 +2,7 @@ import { pairKey, type MatchingLimits, type NumericOverride, type Restriction, t
 
 export type PairReasonCode =
   | "WEIGHT_LBS"
+  /** @deprecated Percent-of-lighter is no longer enforced; kept for older diagnostics only. */
   | "WEIGHT_PCT"
   | "SKILL"
   | "EXPLICIT_EXCLUSION"
@@ -53,8 +54,9 @@ export function weightGap(a: SessionAthlete, b: SessionAthlete): { abs: number; 
 
 /**
  * Decide whether a fighter/volunteer pair may hard spar.
- * Absolute weight, relative weight, and skill must all pass.
- * Aggression is not a limit. A complete one-session override may waive numeric limits only.
+ * Absolute weight (lb) and skill must pass. Percent-of-lighter is not enforced
+ * (older saved % values must not restrict matches). Aggression is not a limit.
+ * A complete one-session override may waive numeric limits only.
  * An active named exclusion always loses.
  */
 export function evaluatePair(args: {
@@ -80,19 +82,12 @@ export function evaluatePair(args: {
 
   const gap = weightGap(fighter, volunteer);
   const weightLbsOk = gap.abs <= limits.maxWeightDifferenceLbs + 1e-9;
-  const weightPctOk = gap.pctOfLighter <= limits.maxWeightDifferencePctOfLighterAthlete + 1e-9;
   const skillOk = Math.abs(fighter.skill - volunteer.skill) <= limits.maxSkillDifference;
 
   if (!weightLbsOk) {
     reasonCodes.push("WEIGHT_LBS");
     reasons.push(
       `Weight gap is ${gap.abs.toFixed(1)} lb, above the ${limits.maxWeightDifferenceLbs} lb limit.`,
-    );
-  }
-  if (!weightPctOk) {
-    reasonCodes.push("WEIGHT_PCT");
-    reasons.push(
-      `Weight gap is ${gap.pctOfLighter.toFixed(1)}% of the lighter athlete, above the ${limits.maxWeightDifferencePctOfLighterAthlete}% limit.`,
     );
   }
   if (!skillOk) {

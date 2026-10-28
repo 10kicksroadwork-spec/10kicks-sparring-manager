@@ -50,18 +50,21 @@ export type SessionAthlete = {
 };
 
 /**
- * Proposed coach-review defaults. Absolute weight, relative weight, and skill apply together.
+ * Proposed coach-review defaults. Absolute weight (lb) and skill apply.
+ * maxWeightDifferencePctOfLighterAthlete is retained for older session JSON only;
+ * matchmaking and scoring ignore it (sentinel 100).
  * maxAggressionDifference remains so older session settings still load. It is not applied.
  */
 export const PROPOSED_MATCH_LIMITS = {
   maxWeightDifferenceLbs: 60,
-  maxWeightDifferencePctOfLighterAthlete: 50,
+  maxWeightDifferencePctOfLighterAthlete: 100,
   maxSkillDifference: 3,
   maxAggressionDifference: 1,
 } as const;
 
 export type MatchingLimits = {
   maxWeightDifferenceLbs: number;
+  /** Ignored by matching/scoring; kept so older saved settings still parse. */
   maxWeightDifferencePctOfLighterAthlete: number;
   maxSkillDifference: number;
   maxAggressionDifference: number;

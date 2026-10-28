@@ -77,12 +77,17 @@ export async function toScheduleInput(
     active: row.active,
   }));
   const settings = view.session.settings ?? saturdayPresetSettings();
+  // Percent-of-lighter is ignored; force the sentinel so older saved % never restricts matches.
+  const limits = {
+    ...settings.limits,
+    maxWeightDifferencePctOfLighterAthlete: 100,
+  };
   return {
     sessionId: view.session.sessionId,
     generationId,
     fighters,
     volunteers,
-    limits: settings.limits,
+    limits,
     restrictions: restrictions.rows.map((row) => ({
       restrictionId: row.restrictionId,
       athleteAId: row.athleteAId,

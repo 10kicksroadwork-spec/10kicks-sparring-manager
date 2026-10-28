@@ -36,16 +36,14 @@ const tight: MatchingLimits = {
 };
 
 describe("practicalLimitCandidates", () => {
-  it("only proposes increases from the current settings", () => {
+  it("only proposes lb/skill increases and ignores percent", () => {
     const current = { ...PROPOSED_MATCH_LIMITS };
     const rows = practicalLimitCandidates(current);
     expect(rows.length).toBeGreaterThan(0);
     for (const row of rows) {
       expect(row.maxWeightDifferenceLbs).toBeGreaterThanOrEqual(current.maxWeightDifferenceLbs);
-      expect(row.maxWeightDifferencePctOfLighterAthlete).toBeGreaterThanOrEqual(
-        current.maxWeightDifferencePctOfLighterAthlete,
-      );
       expect(row.maxSkillDifference).toBeGreaterThanOrEqual(current.maxSkillDifference);
+      expect(row.maxWeightDifferencePctOfLighterAthlete).toBe(100);
     }
   });
 });
@@ -88,7 +86,7 @@ describe("assessMatchupFeasibility", () => {
     }
   });
 
-  it("suggests looser limits when tight numeric thresholds block an otherwise workable pool", () => {
+  it("suggests looser lb/skill limits when tight thresholds block an otherwise workable pool", () => {
     const fighters = [
       athlete("f1", 120, 2),
       athlete("f2", 130, 2),
@@ -106,16 +104,14 @@ describe("assessMatchupFeasibility", () => {
     expect(result.status).toBe("needs_looser_limits");
     if (result.status === "needs_looser_limits") {
       expect(result.suggestion.maxWeightDifferenceLbs).toBeGreaterThanOrEqual(tight.maxWeightDifferenceLbs);
-      expect(result.suggestion.maxWeightDifferencePctOfLighterAthlete).toBeGreaterThanOrEqual(
-        tight.maxWeightDifferencePctOfLighterAthlete,
-      );
       expect(result.suggestion.maxSkillDifference).toBeGreaterThanOrEqual(tight.maxSkillDifference);
+      expect(result.suggestion.maxWeightDifferencePctOfLighterAthlete).toBe(100);
       expect(
         result.suggestion.maxWeightDifferenceLbs > tight.maxWeightDifferenceLbs ||
-          result.suggestion.maxWeightDifferencePctOfLighterAthlete > tight.maxWeightDifferencePctOfLighterAthlete ||
           result.suggestion.maxSkillDifference > tight.maxSkillDifference,
       ).toBe(true);
       expect(result.message).toMatch(/practical increase|not a proven mathematical minimum/i);
+      expect(result.message).not.toMatch(/% of lighter/i);
       expect(result.message).toMatch(/Save Session Settings/i);
     }
   }, 60_000);

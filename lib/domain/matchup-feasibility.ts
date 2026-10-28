@@ -1,9 +1,10 @@
+import { IGNORED_WEIGHT_PCT, normalizeMatchingLimits } from "./minimum-feasible-limits";
 import { solveSchedule } from "./solver";
 import type { ConflictCode, MatchingLimits, ScheduleInput, SolveResult } from "./types";
 
 const MAX_LIMITS: MatchingLimits = {
   maxWeightDifferenceLbs: 100,
-  maxWeightDifferencePctOfLighterAthlete: 100,
+  maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT,
   maxSkillDifference: 6,
   maxAggressionDifference: 4,
 };
@@ -21,8 +22,8 @@ const STRUCTURAL_CODES: ReadonlySet<ConflictCode> = new Set([
 
 export type LimitSuggestion = {
   maxWeightDifferenceLbs: number;
-  maxWeightDifferencePctOfLighterAthlete: number;
   maxSkillDifference: number;
+  maxWeightDifferencePctOfLighterAthlete: number;
 };
 
 export type MatchupFeasibility =
@@ -59,7 +60,7 @@ function withLimits(input: ScheduleInput, limits: MatchingLimits): ScheduleInput
     ...input,
     limits: {
       ...input.limits,
-      ...limits,
+      ...normalizeMatchingLimits(limits),
       maxAggressionDifference: input.limits.maxAggressionDifference,
     },
   };
@@ -83,30 +84,19 @@ function hasStructuralFailure(codes: ConflictCode[]): boolean {
 }
 
 function clampLimits(limits: MatchingLimits): MatchingLimits {
-  return {
-    maxWeightDifferenceLbs: Math.min(100, Math.max(1, Math.round(limits.maxWeightDifferenceLbs * 2) / 2)),
-    maxWeightDifferencePctOfLighterAthlete: Math.min(
-      100,
-      Math.max(1, Math.round(limits.maxWeightDifferencePctOfLighterAthlete * 2) / 2),
-    ),
-    maxSkillDifference: Math.min(6, Math.max(0, Math.round(limits.maxSkillDifference))),
-    maxAggressionDifference: limits.maxAggressionDifference,
-  };
+  return normalizeMatchingLimits(limits);
 }
 
 function bumpScore(from: MatchingLimits, to: MatchingLimits): number {
   const lbs = Math.max(0, to.maxWeightDifferenceLbs - from.maxWeightDifferenceLbs);
-  const pct = Math.max(0, to.maxWeightDifferencePctOfLighterAthlete - from.maxWeightDifferencePctOfLighterAthlete);
   const skill = Math.max(0, to.maxSkillDifference - from.maxSkillDifference);
   // Prefer smaller total movement; skill steps cost more than a half-pound tick.
-  return lbs * 2 + pct * 2 + skill * 20;
+  return lbs * 2 + skill * 20;
 }
 
 function formatSuggestion(suggestion: LimitSuggestion): string {
   return (
-    `Try about ${suggestion.maxWeightDifferenceLbs} lb, ` +
-    `${suggestion.maxWeightDifferencePctOfLighterAthlete}% of lighter, ` +
-    `and skill difference ${suggestion.maxSkillDifference}. ` +
+    `Try about ${suggestion.maxWeightDifferenceLbs} lb and skill difference ${suggestion.maxSkillDifference}. ` +
     `This is a practical increase from the current settings — not a proven mathematical minimum. Save Session Settings to apply.`
   );
 }
@@ -135,6 +125,7 @@ function structuralMessage(codes: ConflictCode[], diagnostics: { code: ConflictC
 /**
  * Candidate limit sets ordered by practical bump size from `current`.
  * Coarse steps keep probe count bounded; not an exhaustive minimum search.
+ * Percent-of-lighter is omitted (always ignored sentinel).
  */
 export function practicalLimitCandidates(current: MatchingLimits): MatchingLimits[] {
   const base = clampLimits(current);
@@ -145,19 +136,17 @@ export function practicalLimitCandidates(current: MatchingLimits): MatchingLimit
     const clamped = clampLimits(next);
     if (
       clamped.maxWeightDifferenceLbs < base.maxWeightDifferenceLbs ||
-      clamped.maxWeightDifferencePctOfLighterAthlete < base.maxWeightDifferencePctOfLighterAthlete ||
       clamped.maxSkillDifference < base.maxSkillDifference
     ) {
       return;
     }
     if (
       clamped.maxWeightDifferenceLbs === base.maxWeightDifferenceLbs &&
-      clamped.maxWeightDifferencePctOfLighterAthlete === base.maxWeightDifferencePctOfLighterAthlete &&
       clamped.maxSkillDifference === base.maxSkillDifference
     ) {
       return;
     }
-    const key = `${clamped.maxWeightDifferenceLbs}|${clamped.maxWeightDifferencePctOfLighterAthlete}|${clamped.maxSkillDifference}`;
+    const key = `${clamped.maxWeightDifferenceLbs}|${clamped.maxSkillDifference}`;
     if (seen.has(key)) return;
     seen.add(key);
     out.push(clamped);
@@ -165,20 +154,15 @@ export function practicalLimitCandidates(current: MatchingLimits): MatchingLimit
 
   const skillSteps = [0, 1, 2, 3, 4, 5, 6].map((d) => Math.min(6, base.maxSkillDifference + d));
   const lbsSteps = [0, 5, 10, 15, 25, 40, 60, 100].map((d) => Math.min(100, base.maxWeightDifferenceLbs + d));
-  const pctSteps = [0, 5, 10, 15, 25, 40, 60, 100].map((d) =>
-    Math.min(100, base.maxWeightDifferencePctOfLighterAthlete + d),
-  );
 
   for (const skill of skillSteps) {
     for (const lbs of lbsSteps) {
-      for (const pct of pctSteps) {
-        push({
-          maxWeightDifferenceLbs: lbs,
-          maxWeightDifferencePctOfLighterAthlete: pct,
-          maxSkillDifference: skill,
-          maxAggressionDifference: base.maxAggressionDifference,
-        });
-      }
+      push({
+        maxWeightDifferenceLbs: lbs,
+        maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT,
+        maxSkillDifference: skill,
+        maxAggressionDifference: base.maxAggressionDifference,
+      });
     }
   }
 
@@ -190,6 +174,7 @@ export function practicalLimitCandidates(current: MatchingLimits): MatchingLimit
 /**
  * Run existing scheduling/solver rules against draft limits.
  * Recommendations never auto-save; callers only display them.
+ * Draft percent-of-lighter values are ignored.
  */
 export function assessMatchupFeasibility(
   input: ScheduleInput,
@@ -248,7 +233,7 @@ export function assessMatchupFeasibility(
     if (isFeasible(probed)) {
       const suggestion: LimitSuggestion = {
         maxWeightDifferenceLbs: candidate.maxWeightDifferenceLbs,
-        maxWeightDifferencePctOfLighterAthlete: candidate.maxWeightDifferencePctOfLighterAthlete,
+        maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT,
         maxSkillDifference: candidate.maxSkillDifference,
       };
       return {
@@ -274,7 +259,7 @@ export function assessMatchupFeasibility(
   if (isFeasible(atMax)) {
     const suggestion: LimitSuggestion = {
       maxWeightDifferenceLbs: MAX_LIMITS.maxWeightDifferenceLbs,
-      maxWeightDifferencePctOfLighterAthlete: MAX_LIMITS.maxWeightDifferencePctOfLighterAthlete,
+      maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT,
       maxSkillDifference: MAX_LIMITS.maxSkillDifference,
     };
     return {

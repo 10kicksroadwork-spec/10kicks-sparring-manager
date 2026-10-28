@@ -4,27 +4,18 @@ import type { MatchingLimits, SessionAthlete } from "./types";
 export type LimitExampleAthlete = Pick<SessionAthlete, "displayName" | "weightLbs" | "skill">;
 
 /**
- * Partner weight window for one athlete under both absolute-lb and % of lighter rules.
- * Both limits must pass, so the window is the intersection of the two constraints.
+ * Partner weight window for one athlete under the absolute-lb limit only.
+ * Percent-of-lighter is no longer part of matching.
  */
 export function partnerWeightRangeLbs(
   athleteWeightLbs: number,
   maxWeightDifferenceLbs: number,
-  maxWeightDifferencePctOfLighterAthlete: number,
 ): { minLbs: number; maxLbs: number } {
   const w = athleteWeightLbs;
   const abs = Math.max(0, maxWeightDifferenceLbs);
-  const pct = Math.max(0, maxWeightDifferencePctOfLighterAthlete);
-  const byLbsMin = w - abs;
-  const byLbsMax = w + abs;
-  const factor = 1 + pct / 100;
-  // Heavier partner: lighter is W → max = W * (1 + pct/100)
-  const byPctMax = w * factor;
-  // Lighter partner V: lighter is V → (W - V) / V * 100 <= pct → V >= W / (1 + pct/100)
-  const byPctMin = factor > 0 ? w / factor : Number.POSITIVE_INFINITY;
   return {
-    minLbs: Math.max(byLbsMin, byPctMin),
-    maxLbs: Math.min(byLbsMax, byPctMax),
+    minLbs: w - abs,
+    maxLbs: w + abs,
   };
 }
 
@@ -59,18 +50,14 @@ function formatLbs(value: number): string {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
 }
 
-/** Lightest checked-in fighter drives the weight example; both lb and % limits apply. */
+/** Lightest checked-in fighter drives the weight example (lb limit only). */
 export function explainWeightLimits(
   fighters: LimitExampleAthlete[],
-  limits: Pick<MatchingLimits, "maxWeightDifferenceLbs" | "maxWeightDifferencePctOfLighterAthlete">,
+  limits: Pick<MatchingLimits, "maxWeightDifferenceLbs">,
 ): WeightLimitExplanation | null {
   if (fighters.length === 0) return null;
   const lightest = fighters.reduce((best, row) => (row.weightLbs < best.weightLbs ? row : best));
-  const range = partnerWeightRangeLbs(
-    lightest.weightLbs,
-    limits.maxWeightDifferenceLbs,
-    limits.maxWeightDifferencePctOfLighterAthlete,
-  );
+  const range = partnerWeightRangeLbs(lightest.weightLbs, limits.maxWeightDifferenceLbs);
   return {
     kind: "weight",
     athleteName: lightest.displayName,
@@ -78,9 +65,9 @@ export function explainWeightLimits(
     minPartnerLbs: range.minLbs,
     maxPartnerLbs: range.maxLbs,
     text:
-      `Both weight limits must pass. With ${lightest.displayName} at ${formatLbs(lightest.weightLbs)} lb ` +
+      `With ${lightest.displayName} at ${formatLbs(lightest.weightLbs)} lb ` +
       `(lightest checked-in fighter), partners must be between ${formatLbs(range.minLbs)} and ${formatLbs(range.maxLbs)} lb ` +
-      `under ${formatLbs(limits.maxWeightDifferenceLbs)} lb and ${formatLbs(limits.maxWeightDifferencePctOfLighterAthlete)}% of the lighter person.`,
+      `under a ${formatLbs(limits.maxWeightDifferenceLbs)} lb max weight difference.`,
   };
 }
 

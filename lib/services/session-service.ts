@@ -268,6 +268,11 @@ export async function updateSettings(
   sessionId: string,
   body: { requestId: string; expectedRevision: number; limits: MatchingLimits; timing: { roundMinutes: number; restSeconds: number } },
 ): Promise<ServiceResult<{ limits: MatchingLimits; timing: { roundMinutes: number; restSeconds: number } }>> {
+  // Percent-of-lighter is not enforced; persist the ignored sentinel so older % cannot linger as a coach-facing value.
+  const limits: MatchingLimits = {
+    ...body.limits,
+    maxWeightDifferencePctOfLighterAthlete: 100,
+  };
   return withWrite({
     actor,
     action: "runSession",
@@ -278,10 +283,10 @@ export async function updateSettings(
     run: async ({ session }) => {
       if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
       return {
-        data: { limits: body.limits, timing: body.timing },
+        data: { limits, timing: body.timing },
         session: {
           ...session,
-          settings: { ...session.settings, limits: body.limits, timing: body.timing },
+          settings: { ...session.settings, limits, timing: body.timing },
         },
       };
     },

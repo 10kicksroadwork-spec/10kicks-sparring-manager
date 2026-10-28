@@ -7,21 +7,16 @@ import {
 } from "@/lib/domain/limit-explanations";
 
 describe("partnerWeightRangeLbs", () => {
-  it("intersects absolute lb and percent-of-lighter constraints", () => {
-    // 120 lb, 60 lb and 50%: both allow up to 180
-    expect(partnerWeightRangeLbs(120, 60, 50)).toEqual({ minLbs: 80, maxLbs: 180 });
+  it("uses absolute lb only (percent no longer intersects)", () => {
+    expect(partnerWeightRangeLbs(120, 60)).toEqual({ minLbs: 60, maxLbs: 180 });
+    expect(partnerWeightRangeLbs(200, 60)).toEqual({ minLbs: 140, maxLbs: 260 });
   });
 
-  it("lets the tighter rule win on the high side", () => {
-    // 200 lb, 60 lb → 260; 50% → 300; intersection max is 260
-    expect(partnerWeightRangeLbs(200, 60, 50).maxLbs).toBe(260);
-  });
-
-  it("lets the tighter rule win on the low side", () => {
-    // 120 lb, 15 lb → min 105; 10% → min 120/1.1 ≈ 109.09; intersection uses pct
-    const range = partnerWeightRangeLbs(120, 15, 10);
-    expect(range.minLbs).toBeCloseTo(120 / 1.1, 5);
-    expect(range.maxLbs).toBeCloseTo(Math.min(135, 132), 5);
+  it("allows pairs that old percent-of-lighter would have blocked", () => {
+    // 120 lb + 15 lb → 105–135; under a 10% rule the low side was ~109
+    const range = partnerWeightRangeLbs(120, 15);
+    expect(range.minLbs).toBe(105);
+    expect(range.maxLbs).toBe(135);
   });
 });
 
@@ -40,17 +35,17 @@ describe("live explanations from checked-in fighters", () => {
     { displayName: "Mid", weightLbs: 160, skill: 4 },
   ];
 
-  it("uses the lightest fighter for the weight example", () => {
+  it("uses the lightest fighter for the weight example without percent language", () => {
     const explanation = explainWeightLimits(fighters, {
       maxWeightDifferenceLbs: 60,
-      maxWeightDifferencePctOfLighterAthlete: 50,
     });
     expect(explanation?.athleteName).toBe("Light");
     expect(explanation?.athleteWeightLbs).toBe(120);
-    expect(explanation?.minPartnerLbs).toBe(80);
+    expect(explanation?.minPartnerLbs).toBe(60);
     expect(explanation?.maxPartnerLbs).toBe(180);
     expect(explanation?.text).toContain("Light");
     expect(explanation?.text).toContain("120");
+    expect(explanation?.text.toLowerCase()).not.toMatch(/%|percent|lighter person/);
   });
 
   it("uses the lowest-skill fighter for the skill example", () => {
@@ -63,7 +58,7 @@ describe("live explanations from checked-in fighters", () => {
   });
 
   it("returns null when nobody is checked in as a fighter", () => {
-    expect(explainWeightLimits([], { maxWeightDifferenceLbs: 60, maxWeightDifferencePctOfLighterAthlete: 50 })).toBeNull();
+    expect(explainWeightLimits([], { maxWeightDifferenceLbs: 60 })).toBeNull();
     expect(explainSkillLimits([], { maxSkillDifference: 3 })).toBeNull();
   });
 });
