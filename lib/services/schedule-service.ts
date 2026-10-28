@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { eligibleVolunteersForAssignment, type EligibleVolunteerOption } from "@/lib/domain/eligible-volunteers";
 import { coachNextSteps } from "@/lib/domain/diagnostics";
 import { assessMatchupFeasibility, type MatchupFeasibility } from "@/lib/domain/matchup-feasibility";
+import {
+  findMinimumFeasibleLimits,
+  type MinimumFeasibleLimitsResult,
+} from "@/lib/domain/minimum-feasible-limits";
 import { rundownStarted } from "@/lib/domain/rundown";
 import { compactScheduleBlocksToPrefix } from "@/lib/domain/location-packing";
 import { solveSchedule } from "@/lib/domain/solver";
@@ -119,6 +123,33 @@ export async function checkMatchupFeasibility(
     deterministicSeed: seedFor(sessionId),
   });
   return { ok: true, data: { feasibility }, revision: view.session.revision, requestId: body.requestId };
+}
+
+/**
+ * Joint minimum (skill, lbs) verified by the real solver for current attendance.
+ * Does not save settings or publish a rundown.
+ */
+export async function checkRecommendedMinimumLimits(
+  actor: Actor,
+  sessionId: string,
+  body: { requestId: string },
+): Promise<ServiceResult<{ recommended: MinimumFeasibleLimitsResult }>> {
+  if (!can(actor.role, "read")) return fail(403, "FORBIDDEN", "Your account cannot do that.", body.requestId);
+  const opened = await openStore(body.requestId);
+  if ("ok" in opened) return opened;
+  const view = await loadSession(opened.repo, sessionId);
+  if (!view) return fail(404, "NOT_FOUND", "That session does not exist.", body.requestId);
+  if (view.session.status === "CANCELLED") {
+    return fail(409, "SESSION_CANCELLED", "This session is cancelled.", body.requestId);
+  }
+  const scheduleInput = await toScheduleInput(opened.repo, view, "minimum-limits", []);
+  const budget = Math.min(Math.max(view.session.settings.solverBudgetMs ?? 15_000, 1), 25_000);
+  const recommended = findMinimumFeasibleLimits(scheduleInput, {
+    maxComputeMs: Math.min(budget, 12_000),
+    probeComputeMs: Math.min(budget, 4_000),
+    deterministicSeed: seedFor(sessionId),
+  });
+  return { ok: true, data: { recommended }, revision: view.session.revision, requestId: body.requestId };
 }
 
 async function persistSolve(

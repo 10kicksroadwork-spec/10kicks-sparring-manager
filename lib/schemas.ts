@@ -62,6 +62,11 @@ export const feasibilitySchema = z.object({
   limits: limitsSchema,
 });
 
+/** Joint minimum feasible limits for current attendance (does not save). */
+export const recommendedLimitsSchema = z.object({
+  requestId: mutationMeta.requestId,
+});
+
 export const attendancePutSchema = z.object({
   ...mutationMeta,
   athleteId: z.string().trim().min(1).optional(),

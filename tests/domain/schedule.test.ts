@@ -105,7 +105,7 @@ describe("Saturday rules", () => {
   it("uses the configured weight and skill thresholds", () => {
     expect(PROPOSED_MATCH_LIMITS).toMatchObject({
       maxWeightDifferenceLbs: 60,
-      maxWeightDifferencePctOfLighterAthlete: 50,
+      maxWeightDifferencePctOfLighterAthlete: 100,
       maxSkillDifference: 3,
       maxAggressionDifference: 1,
     });
@@ -545,8 +545,8 @@ describe("Saturday rules", () => {
     expect(countsAsHardSession("PLANNED")).toBe(true);
   });
 
-  it("enforces absolute weight and percent together", () => {
-    // Fixture limits stay tight so AND-of-both-weight-rules stays observable; session defaults are looser.
+  it("enforces absolute weight in pounds and ignores percent-of-lighter", () => {
+    // Old tight % must not block a pair that is within the lb limit.
     const limits = {
       maxWeightDifferenceLbs: 15,
       maxWeightDifferencePctOfLighterAthlete: 10,
@@ -554,18 +554,18 @@ describe("Saturday rules", () => {
       maxAggressionDifference: 1,
     };
     const fighter = athlete("f1", 100);
-    const heavyPercent = athlete("v1", 114);
-    const withinBoth = athlete("v2", 200);
-    const fighterHeavy = athlete("f2", 200);
+    const withinLbsOverPct = athlete("v1", 114); // 14 lb / 14% — fails old 10% but passes 15 lb
     const absoluteMiss = athlete("v3", 166);
     const fighterMid = athlete("f3", 150);
     const base = { sessionId: "s1", limits, restrictions: [], overrides: [] };
 
-    expect(evaluatePair({ ...base, fighter, volunteer: heavyPercent }).eligible).toBe(false);
-    expect(evaluatePair({ ...base, fighter: fighterHeavy, volunteer: athlete("v4", 214) }).reasonCodes).not.toContain("WEIGHT_LBS");
-    expect(evaluatePair({ ...base, fighter: fighterHeavy, volunteer: athlete("v4", 214) }).eligible).toBe(true);
+    const overPct = evaluatePair({ ...base, fighter, volunteer: withinLbsOverPct });
+    expect(overPct.eligible).toBe(true);
+    expect(overPct.reasonCodes).not.toContain("WEIGHT_PCT");
+    expect(overPct.reasonCodes).not.toContain("WEIGHT_LBS");
+
     expect(evaluatePair({ ...base, fighter: fighterMid, volunteer: absoluteMiss }).reasonCodes).toContain("WEIGHT_LBS");
-    expect(evaluatePair({ ...base, fighter, volunteer: withinBoth }).eligible).toBe(false);
+    expect(evaluatePair({ ...base, fighter: athlete("f2", 200), volunteer: athlete("v4", 214) }).eligible).toBe(true);
   });
 
   it("enforces skill and ignores aggression", () => {

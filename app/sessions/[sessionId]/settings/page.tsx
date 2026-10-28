@@ -9,6 +9,8 @@ import {
   explainWeightLimits,
 } from "@/lib/domain/limit-explanations";
 import type { MatchupFeasibility } from "@/lib/domain/matchup-feasibility";
+import type { MinimumFeasibleLimitsResult } from "@/lib/domain/minimum-feasible-limits";
+import { IGNORED_WEIGHT_PCT } from "@/lib/domain/minimum-feasible-limits";
 import {
   formatNumericDraft,
   parseNumericDraft,
@@ -76,7 +78,22 @@ function presentFighters(rows: AttendanceRow[]) {
     }));
 }
 
+/** Fingerprint of who is present so we recalc mins when attendance changed before opening this page. */
+function attendanceFingerprint(rows: AttendanceRow[]): string {
+  return rows
+    .filter((row) => row.present)
+    .map((row) => `${row.athleteId}:${row.assignedRole}:${row.weightLbsSnapshot}:${row.skillSnapshot}`)
+    .sort()
+    .join("|");
+}
+
 function feasibilityTone(status: MatchupFeasibility["status"]): string {
+  if (status === "ok") return "text-[var(--ok)]";
+  if (status === "impossible") return "text-[var(--danger)]";
+  return "text-[var(--muted)]";
+}
+
+function recommendedTone(status: MinimumFeasibleLimitsResult["status"]): string {
   if (status === "ok") return "text-[var(--ok)]";
   if (status === "impossible") return "text-[var(--danger)]";
   return "text-[var(--muted)]";
@@ -93,13 +110,24 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
   const [notice, setNotice] = useState("");
   const [feasibility, setFeasibility] = useState<MatchupFeasibility | null>(null);
   const [feasibilityLoading, setFeasibilityLoading] = useState(false);
+  const [recommended, setRecommended] = useState<MinimumFeasibleLimitsResult | null>(null);
+  const [recommendedLoading, setRecommendedLoading] = useState(false);
+  /** Once the coach moves a slider, auto-apply from attendance refresh must not overwrite. */
+  const [userEditing, setUserEditing] = useState(false);
   const feasibilitySeq = useRef(0);
+  const recommendedSeq = useRef(0);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const limitsRef = useRef<Limits | null>(null);
+  const userEditingRef = useRef(false);
+  const appliedFingerprintRef = useRef<string | null>(null);
 
   useEffect(() => {
     limitsRef.current = limits;
   }, [limits]);
+
+  useEffect(() => {
+    userEditingRef.current = userEditing;
+  }, [userEditing]);
 
   useEffect(() => {
     let ignore = false;
@@ -108,19 +136,29 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
       attendance: AttendanceRow[];
     }>(`/api/sessions/${sessionId}`).then((result) => {
       if (ignore) return;
-      if (!result.ok) setError(result.error.message);
-      else {
-        setRevision(result.data.session.revision);
-        const nextLimits = result.data.session.settings.limits;
-        setLimits(nextLimits);
-        limitsRef.current = nextLimits;
-        setTimingDraft({
-          roundMinutes: formatNumericDraft(result.data.session.settings.timing.roundMinutes),
-          restSeconds: formatNumericDraft(result.data.session.settings.timing.restSeconds),
-        });
-        setFighters(presentFighters(result.data.attendance ?? []));
-        scheduleFeasibility(nextLimits);
+      if (!result.ok) {
+        setError(result.error.message);
+        return;
       }
+      setRevision(result.data.session.revision);
+      const saved = result.data.session.settings.limits;
+      const nextLimits: Limits = {
+        ...saved,
+        maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT,
+      };
+      setLimits(nextLimits);
+      limitsRef.current = nextLimits;
+      setTimingDraft({
+        roundMinutes: formatNumericDraft(result.data.session.settings.timing.roundMinutes),
+        restSeconds: formatNumericDraft(result.data.session.settings.timing.restSeconds),
+      });
+      const attendance = result.data.attendance ?? [];
+      setFighters(presentFighters(attendance));
+      void applyRecommendedMinimums({
+        fingerprint: attendanceFingerprint(attendance),
+        force: true,
+        seedLimits: nextLimits,
+      });
     });
     return () => {
       ignore = true;
@@ -136,7 +174,7 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
       method: "POST",
       body: JSON.stringify({
         requestId: newRequestId(),
-        limits: nextLimits,
+        limits: { ...nextLimits, maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT },
       }),
     });
     if (seq !== feasibilitySeq.current) return;
@@ -158,15 +196,100 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
     }, 280);
   }
 
+  async function applyRecommendedMinimums(args: {
+    fingerprint: string;
+    force: boolean;
+    seedLimits?: Limits;
+  }) {
+    if (!args.force && userEditingRef.current) return;
+    if (!args.force && appliedFingerprintRef.current === args.fingerprint) return;
+
+    const seq = ++recommendedSeq.current;
+    setRecommendedLoading(true);
+    const result = await api<{ recommended: MinimumFeasibleLimitsResult }>(
+      `/api/sessions/${sessionId}/recommended-limits`,
+      {
+        method: "POST",
+        body: JSON.stringify({ requestId: newRequestId() }),
+      },
+    );
+    if (seq !== recommendedSeq.current) return;
+    setRecommendedLoading(false);
+
+    if (!result.ok) {
+      setRecommended({
+        status: "inconclusive",
+        message: result.error.message || "Could not calculate minimum limits right now.",
+        method: "joint skill-then-lbs",
+      });
+      const fallback = args.seedLimits ?? limitsRef.current;
+      if (fallback) scheduleFeasibility(fallback);
+      return;
+    }
+
+    const next = result.data.recommended;
+    setRecommended(next);
+    appliedFingerprintRef.current = args.fingerprint;
+
+    if (next.status === "ok" && (args.force || !userEditingRef.current)) {
+      const base = args.seedLimits ?? limitsRef.current;
+      if (base) {
+        const applied: Limits = {
+          ...base,
+          maxWeightDifferenceLbs: next.limits.maxWeightDifferenceLbs,
+          maxSkillDifference: next.limits.maxSkillDifference,
+          maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT,
+        };
+        limitsRef.current = applied;
+        setLimits(applied);
+        setUserEditing(false);
+        userEditingRef.current = false;
+        scheduleFeasibility(applied);
+        return;
+      }
+    }
+
+    const fallback = args.seedLimits ?? limitsRef.current;
+    if (fallback) scheduleFeasibility(fallback);
+  }
+
   function patchLimit<K extends keyof Limits>(key: K, value: Limits[K]) {
     if (!limits) return;
-    const next = { ...limits, [key]: value };
+    const next = { ...limits, [key]: value, maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT };
     limitsRef.current = next;
     setLimits(next);
+    setUserEditing(true);
+    userEditingRef.current = true;
   }
 
   function onLimitRelease() {
     if (limitsRef.current) scheduleFeasibility(limitsRef.current);
+  }
+
+  function recalculateMinimums() {
+    setUserEditing(false);
+    userEditingRef.current = false;
+    setNotice("");
+    // Force recompute for current attendance even if fingerprint matches.
+    appliedFingerprintRef.current = null;
+    void (async () => {
+      const session = await api<{
+        session: { revision: number; settings: Settings };
+        attendance: AttendanceRow[];
+      }>(`/api/sessions/${sessionId}`);
+      if (!session.ok) {
+        setError(session.error.message);
+        return;
+      }
+      setRevision(session.data.session.revision);
+      const attendance = session.data.attendance ?? [];
+      setFighters(presentFighters(attendance));
+      await applyRecommendedMinimums({
+        fingerprint: attendanceFingerprint(attendance),
+        force: true,
+        seedLimits: limitsRef.current ?? undefined,
+      });
+    })();
   }
 
   async function save(event: React.FormEvent) {
@@ -179,7 +302,7 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
       return;
     }
     const settings: Settings = {
-      limits,
+      limits: { ...limits, maxWeightDifferencePctOfLighterAthlete: IGNORED_WEIGHT_PCT },
       timing: {
         roundMinutes: parseNumericDraft(timingDraft.roundMinutes)!,
         restSeconds: parseNumericDraft(timingDraft.restSeconds)!,
@@ -224,7 +347,7 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
 
             <div className="grid gap-2">
               <div className="flex items-baseline justify-between gap-3">
-                <label htmlFor="max-weight-lbs" className="text-sm text-[var(--muted)]">Maximum weight difference (lb)</label>
+                <label htmlFor="max-weight-lbs" className="text-sm text-[var(--muted)]">Max weight difference (lb)</label>
                 <p className="font-display text-3xl leading-none tabular-nums" aria-live="polite" data-testid="weight-lbs-value">
                   {limits.maxWeightDifferenceLbs}
                 </p>
@@ -243,38 +366,14 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
                 onTouchEnd={onLimitRelease}
                 onKeyUp={onLimitRelease}
               />
+              <p className="text-sm text-[var(--muted)]" data-testid="weight-explanation">
+                {weightExplanation?.text ?? "Check fighters in to see a live weight example from the lightest person present."}
+              </p>
             </div>
 
             <div className="grid gap-2">
               <div className="flex items-baseline justify-between gap-3">
-                <label htmlFor="max-weight-pct" className="text-sm text-[var(--muted)]">Maximum weight difference (% of lighter person)</label>
-                <p className="font-display text-3xl leading-none tabular-nums" aria-live="polite" data-testid="weight-pct-value">
-                  {limits.maxWeightDifferencePctOfLighterAthlete}
-                </p>
-              </div>
-              <input
-                id="max-weight-pct"
-                className="limit-slider"
-                type="range"
-                min={1}
-                max={100}
-                step={0.5}
-                value={limits.maxWeightDifferencePctOfLighterAthlete}
-                aria-label="Max weight gap percent"
-                onChange={(event) => patchLimit("maxWeightDifferencePctOfLighterAthlete", snapHalf(Number(event.target.value), 1, 100))}
-                onPointerUp={onLimitRelease}
-                onTouchEnd={onLimitRelease}
-                onKeyUp={onLimitRelease}
-              />
-            </div>
-
-            <p className="text-sm text-[var(--muted)]" data-testid="weight-explanation">
-              {weightExplanation?.text ?? "Check fighters in to see a live weight example from the lightest person present."}
-            </p>
-
-            <div className="grid gap-2">
-              <div className="flex items-baseline justify-between gap-3">
-                <label htmlFor="max-skill-diff" className="text-sm text-[var(--muted)]">Maximum skill difference</label>
+                <label htmlFor="max-skill-diff" className="text-sm text-[var(--muted)]">Max skill difference (0–6)</label>
                 <p className="font-display text-3xl leading-none tabular-nums" aria-live="polite" data-testid="skill-diff-value">
                   {limits.maxSkillDifference}
                 </p>
@@ -293,11 +392,35 @@ export default function SettingsPage({ params }: { params: Promise<{ sessionId: 
                 onTouchEnd={onLimitRelease}
                 onKeyUp={onLimitRelease}
               />
+              <p className="text-sm text-[var(--muted)]" data-testid="skill-explanation">
+                {skillExplanation?.text ?? "Check fighters in to see a live skill band from the lowest-skill person present."}
+              </p>
             </div>
 
-            <p className="text-sm text-[var(--muted)]" data-testid="skill-explanation">
-              {skillExplanation?.text ?? "Check fighters in to see a live skill band from the lowest-skill person present."}
-            </p>
+            <div className="grid gap-2" data-testid="auto-minimums">
+              <p className="text-sm text-[var(--muted)]">
+                Opening this page sets both sliders to the smallest verified pair that still builds a complete schedule
+                (joint search: skill 0→6, then minimal lb). Percent-of-lighter is not used.
+              </p>
+              {recommendedLoading && !recommended ? (
+                <p className="text-sm text-[var(--muted)]" role="status">Calculating minimums…</p>
+              ) : null}
+              {recommended ? (
+                <p className={`text-sm ${recommendedTone(recommended.status)}`} role="status" data-testid="recommended-message">
+                  {recommendedLoading ? "Calculating minimums… " : null}
+                  {recommended.message}
+                </p>
+              ) : null}
+              <button
+                className="tap h-12"
+                type="button"
+                disabled={recommendedLoading}
+                data-testid="recalculate-minimums"
+                onClick={() => recalculateMinimums()}
+              >
+                {recommendedLoading ? "Calculating…" : "Recalculate Minimums"}
+              </button>
+            </div>
           </fieldset>
 
           <section className="card grid gap-2" aria-labelledby="matchup-feasibility-heading" data-testid="matchup-feasibility">
