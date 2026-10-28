@@ -67,7 +67,7 @@ export default function PrintPage({ params }: { params: Promise<{ sessionId: str
           ))}
         </tbody>
       </table>
-      <button className="no-print mt-6 underline" type="button" onClick={() => window.print()} data-testid="print-rundown">Print or save PDF</button>
+      <button className="tap tap-gold no-print mt-6 h-12 w-full max-w-sm text-base" type="button" onClick={() => window.print()} data-testid="print-rundown">Print or save PDF</button>
       <p className="sr-only">{blocks.map((block) => locationLabel("MAIN_RING") + block).join(" ")}</p>
     </main>
   );
