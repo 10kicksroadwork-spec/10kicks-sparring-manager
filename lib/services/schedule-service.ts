@@ -169,6 +169,7 @@ async function persistSolve(
   const preview = await loadSession(opened.repo, sessionId);
   if (!preview) return fail(404, "NOT_FOUND", "That session does not exist.", body.requestId);
   if (preview.session.status === "CANCELLED") return fail(409, "SESSION_CANCELLED", "This session is cancelled.", body.requestId);
+  if (preview.session.status === "COMPLETED") return fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId);
   if (preview.session.revision !== body.expectedRevision) {
     return fail(409, "STALE_REVISION", "Another coach updated this session. Refresh the rundown.", body.requestId);
   }
@@ -234,6 +235,9 @@ export async function unpublishRundown(
     eventType: "schedule.unpublish",
     run: async ({ repo, session }) => {
       if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId));
+      }
       if (!session.activeGenerationId) {
         throw new ServiceStop(fail(409, "NOT_GENERATED", "There is no rundown to discard.", body.requestId));
       }
@@ -326,6 +330,9 @@ export async function patchAssignment(
     eventType: `assignment.${body.action}`,
     run: async ({ repo, session, now }) => {
       if (!session?.activeGenerationId) throw new ServiceStop(fail(409, "NOT_GENERATED", "Generate a rundown first.", body.requestId));
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId));
+      }
       const view = await loadSession(repo, sessionId);
       if (!view) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
       const active = activeAssignments(view);
@@ -365,8 +372,12 @@ export async function patchAssignment(
           throw new ServiceStop(fail(400, "NOT_ELIGIBLE", "That volunteer is not checked in for this session.", body.requestId));
         }
         const eligible = eligibleVolunteersForAssignment(input, active, assignmentId);
-        const choice = eligible.find((row) => row.volunteerId === body.volunteerId && !row.current);
+        const choice = eligible.find((row) => row.volunteerId === body.volunteerId && !row.current && row.available);
         if (!choice) {
+          const blocked = eligible.find((row) => row.volunteerId === body.volunteerId && !row.current);
+          if (blocked) {
+            throw new ServiceStop(fail(400, "NOT_ELIGIBLE", blocked.reasons.join(" ") || "That volunteer is not available for this match.", body.requestId));
+          }
           const { evaluatePair } = await import("@/lib/domain/matchmaking");
           const decision = evaluatePair({
             sessionId,
@@ -426,6 +437,9 @@ export async function completeBlock(
     eventType: "block.complete",
     run: async ({ repo, session, now }) => {
       if (!session?.activeGenerationId) throw new ServiceStop(fail(409, "NOT_GENERATED", "Generate a rundown first.", body.requestId));
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId));
+      }
       if (!body.confirmBothRounds) {
         throw new ServiceStop(fail(400, "CONFIRM_ROUNDS", "Confirm every match in the block finished both rounds.", body.requestId));
       }
@@ -457,6 +471,9 @@ export async function undoGeneration(
     eventType: "schedule.undo",
     run: async ({ repo, session }) => {
       if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId));
+      }
       const audit = await repo.readAudit(sessionId);
       const previous = [...audit.rows].reverse().find((row) => row.eventType === "generate" || row.eventType === "regenerate");
       const previousGenerationId = String(previous?.payload.previousGenerationId ?? "");

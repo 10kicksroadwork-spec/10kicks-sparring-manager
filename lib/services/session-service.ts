@@ -94,6 +94,9 @@ export async function ensureCampFighters(
   if ("ok" in opened) return opened;
   const view = await loadSession(opened.repo, sessionId);
   if (!view) return fail(404, "NOT_FOUND", "That session does not exist.", body.requestId);
+  if (view.session.status === "COMPLETED") {
+    return fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId);
+  }
   if (view.session.revision !== body.expectedRevision) {
     return fail(409, "STALE_REVISION", "Another coach updated this session. Refresh the rundown.", body.requestId);
   }
@@ -134,7 +137,10 @@ export async function getSession(actor: Actor, sessionId: string, requestId = "r
   const names = new Map(athletes.rows.map((athlete) => [athlete.athleteId, athlete]));
   const active = activeAssignments(view);
   const eligibility = await eligibilityReport(opened.repo, view);
-  const swaps: Record<string, { volunteerId: string; displayName: string; current: boolean; reasons: string[] }[]> = {};
+  const swaps: Record<
+    string,
+    { volunteerId: string; displayName: string; current: boolean; available: boolean; group: "recommended" | "other"; reasons: string[] }[]
+  > = {};
   if (view.session.activeGenerationId) {
     const { toScheduleInput } = await import("./snapshot");
     const { eligibleVolunteersForAssignment } = await import("@/lib/domain/eligible-volunteers");
@@ -172,7 +178,15 @@ export async function putAttendance(
     weightLbs?: number;
     skill?: number;
     aggression?: number | null;
-    createVolunteer?: { displayName: string; weightLbs: number; skill: number; aggression?: number | null; roleEligibility: Athlete["roleEligibility"]; coachNotes?: string };
+    createVolunteer?: {
+      displayName: string;
+      weightLbs: number;
+      skill: number;
+      aggression?: number | null;
+      gender?: Athlete["gender"];
+      roleEligibility: Athlete["roleEligibility"];
+      coachNotes?: string;
+    };
   },
 ): Promise<ServiceResult<{ attendance: Attendance; athlete?: Athlete }>> {
   return withWrite({
@@ -187,6 +201,9 @@ export async function putAttendance(
       if (session.status === "CANCELLED") {
         throw new ServiceStop(fail(409, "SESSION_CANCELLED", "This session is cancelled.", body.requestId));
       }
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId));
+      }
       let created: Athlete | undefined;
       let athleteId = body.athleteId;
       if (body.createVolunteer) {
@@ -196,6 +213,7 @@ export async function putAttendance(
           weightLbs: body.createVolunteer.weightLbs,
           skill: body.createVolunteer.skill,
           aggression: body.createVolunteer.aggression ?? null,
+          gender: body.createVolunteer.gender ?? null,
           roleEligibility: "VOLUNTEER",
           active: true,
           coachNotes: body.createVolunteer.coachNotes?.trim() ?? "",
@@ -282,12 +300,70 @@ export async function updateSettings(
     eventType: "session.settings",
     run: async ({ session }) => {
       if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is completed and read-only.", body.requestId));
+      }
+      if (session.status === "CANCELLED") {
+        throw new ServiceStop(fail(409, "SESSION_CANCELLED", "This session is cancelled.", body.requestId));
+      }
       return {
         data: { limits, timing: body.timing },
         session: {
           ...session,
           settings: { ...session.settings, limits, timing: body.timing },
         },
+      };
+    },
+  });
+}
+
+/**
+ * Save the final card and mark the Saturday Completed.
+ * Does not auto-complete unfinished matches. Completed sessions stay read-only
+ * and never reopen as the active homepage session.
+ */
+export async function completeSession(
+  actor: Actor,
+  sessionId: string,
+  body: { requestId: string; expectedRevision: number; confirmIncomplete?: boolean },
+): Promise<ServiceResult<{ status: "COMPLETED"; unfinishedAssignments: number }>> {
+  return withWrite({
+    actor,
+    action: "runSession",
+    sessionId,
+    expectedRevision: body.expectedRevision,
+    requestId: body.requestId,
+    eventType: "session.complete",
+    run: async ({ repo, session }) => {
+      if (!session) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      if (session.status === "CANCELLED") {
+        throw new ServiceStop(fail(409, "SESSION_CANCELLED", "This session is cancelled.", body.requestId));
+      }
+      if (session.status === "COMPLETED") {
+        throw new ServiceStop(fail(409, "SESSION_COMPLETED", "This session is already completed.", body.requestId));
+      }
+      if (!session.activeGenerationId) {
+        throw new ServiceStop(fail(409, "NOT_GENERATED", "Generate a rundown before completing the session.", body.requestId));
+      }
+      const view = await loadSession(repo, sessionId);
+      if (!view) throw new ServiceStop(fail(404, "NOT_FOUND", "That session does not exist.", body.requestId));
+      const active = activeAssignments(view);
+      const unfinished = active.filter((row) => row.status === "PLANNED" || row.status === "IN_PROGRESS");
+      if (unfinished.length > 0 && !body.confirmIncomplete) {
+        throw new ServiceStop(
+          fail(
+            400,
+            "CONFIRM_INCOMPLETE",
+            `${unfinished.length} hard ${unfinished.length === 1 ? "match is" : "matches are"} still unfinished. Confirm to complete the session anyway.`,
+            body.requestId,
+            { unfinishedAssignments: unfinished.length },
+          ),
+        );
+      }
+      return {
+        data: { status: "COMPLETED" as const, unfinishedAssignments: unfinished.length },
+        session: { ...session, status: "COMPLETED" },
+        payload: { unfinishedAssignments: unfinished.length },
       };
     },
   });

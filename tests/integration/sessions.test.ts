@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { GET as getAthletes, POST as postAthletes } from "@/app/api/athletes/route";
 import { POST as postRestrictions } from "@/app/api/restrictions/route";
 import { createAthlete } from "@/lib/services/athlete-service";
-import { putAttendance, createSession, ensureCampFighters, getSession, updateSettings } from "@/lib/services/session-service";
-import { completeBlock, generate, regenerate, unpublishRundown } from "@/lib/services/schedule-service";
+import { putAttendance, createSession, ensureCampFighters, getSession, updateSettings, completeSession, listSessions } from "@/lib/services/session-service";
+import { completeBlock, generate, regenerate, unpublishRundown, patchAssignment } from "@/lib/services/schedule-service";
+import { saturdaySessionCta, previousCompletedSessions } from "@/lib/ui/saturday-nav";
 import { resetMemoryStore } from "@/lib/repository/memory";
 import { createMemoryLock, createUnavailableLock, getLockManager, resetMemoryLocks, setLockManagerForTests } from "@/lib/redis/lock";
 import { parseAthleteRow } from "@/lib/sheets/rows";
@@ -287,17 +288,18 @@ describe("session writes", () => {
   });
 
   it("reports corrupt sheet rows instead of treating them as athletes", () => {
-    const parsed = parseAthleteRow(["id-1", "Broken", "nope", "3", "3", "FIGHTER", "TRUE", "", "t", "t"]);
+    const parsed = parseAthleteRow(["id-1", "Broken", "nope", "3", "3", "", "FIGHTER", "TRUE", "", "t", "t"]);
     expect("error" in parsed).toBe(true);
   });
 
   it("keeps a directory row with a blank skill and blocks hard-session check-in", async () => {
-    const parsed = parseAthleteRow(["id-2", "Directory", "", "7", "", "BOTH", "TRUE", "weight_band:180-200", "t", "t"]);
+    const parsed = parseAthleteRow(["id-2", "Directory", "", "7", "", "", "BOTH", "TRUE", "weight_band:180-200", "t", "t"]);
     expect("athlete" in parsed).toBe(true);
     if (!("athlete" in parsed)) return;
     expect(parsed.athlete.weightLbs).toBeNull();
     expect(parsed.athlete.skill).toBe(7);
     expect(parsed.athlete.aggression).toBeNull();
+    expect(parsed.athlete.gender).toBeNull();
 
     const now = new Date().toISOString();
     await getRepository().commit({
@@ -340,6 +342,7 @@ describe("session writes", () => {
           weightLbs: 170,
           skill: 5,
           aggression: null,
+          gender: null,
           roleEligibility: "BOTH",
           active: true,
           coachNotes: "",
@@ -352,6 +355,7 @@ describe("session writes", () => {
           weightLbs: 160,
           skill: 4,
           aggression: null,
+          gender: null,
           roleEligibility: "BOTH",
           active: false,
           coachNotes: "",
@@ -420,12 +424,13 @@ describe("session writes", () => {
   });
 
   it("checks in a person who has weight and skill and no aggression", async () => {
-    const parsed = parseAthleteRow(["id-3", "Mason Cauthen", "170", "5", "", "BOTH", "TRUE", "weight_band:160-180", "t", "t"]);
+    const parsed = parseAthleteRow(["id-3", "Mason Cauthen", "170", "5", "", "FEMALE", "BOTH", "TRUE", "weight_band:160-180", "t", "t"]);
     expect("athlete" in parsed).toBe(true);
     if (!("athlete" in parsed)) return;
     expect(parsed.athlete.weightLbs).toBe(170);
     expect(parsed.athlete.skill).toBe(5);
     expect(parsed.athlete.aggression).toBeNull();
+    expect(parsed.athlete.gender).toBe("FEMALE");
 
     const now = new Date().toISOString();
     await getRepository().commit({
@@ -645,7 +650,9 @@ describe("session writes", () => {
     if (!view.ok) return;
     const options = view.data.swaps?.[target.assignmentId] ?? [];
     expect(options.some((row) => row.current && row.volunteerId === target.volunteerId)).toBe(true);
-    const replacement = options.find((row) => !row.current);
+    expect(options.length).toBeGreaterThan(2);
+    expect(options.some((row) => row.available === false)).toBe(true);
+    const replacement = options.find((row) => !row.current && row.available !== false);
     expect(replacement).toBeTruthy();
     if (!replacement) return;
     const swapped = await patchAssignment(coach, session.data.session.sessionId, target.assignmentId, {
@@ -709,6 +716,101 @@ describe("session writes", () => {
     expect(attendance.rows).toHaveLength(0);
     const assignments = await getRepository().readAssignments(session.data.session.sessionId);
     expect(assignments.rows).toHaveLength(0);
+  });
+
+  it("completes a session into Previous Sessions and refuses reopen mutations", async () => {
+    const session = await createSession(coach, { requestId: "req-complete-session", dateLocal: "2099-05-01" });
+    expect(session.ok).toBe(true);
+    if (!session.ok) return;
+    let revision = session.data.session.revision;
+    for (let i = 0; i < 5; i += 1) {
+      const created = await createAthlete(coach, { ...athleteBody(`Complete Fighter ${i}`), requestId: `req-cf-${i}` });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      const checked = await putAttendance(coach, session.data.session.sessionId, {
+        requestId: `req-cf-in-${i}`,
+        expectedRevision: revision,
+        athleteId: created.data.athlete.athleteId,
+        assignedRole: "FIGHTER",
+        present: true,
+      });
+      expect(checked.ok).toBe(true);
+      if (!checked.ok) return;
+      revision = checked.revision ?? revision;
+    }
+    for (let i = 0; i < 15; i += 1) {
+      const created = await createAthlete(coach, { ...athleteBody(`Complete Vol ${i}`), requestId: `req-cv-${i}` });
+      expect(created.ok).toBe(true);
+      if (!created.ok) return;
+      const checked = await putAttendance(coach, session.data.session.sessionId, {
+        requestId: `req-cv-in-${i}`,
+        expectedRevision: revision,
+        athleteId: created.data.athlete.athleteId,
+        assignedRole: "VOLUNTEER",
+        present: true,
+      });
+      expect(checked.ok).toBe(true);
+      if (!checked.ok) return;
+      revision = checked.revision ?? revision;
+    }
+    const published = await generate(coach, session.data.session.sessionId, { requestId: "req-complete-gen", expectedRevision: revision });
+    expect(published.ok).toBe(true);
+    if (!published.ok) return;
+    const data = published.data as { published: boolean; assignments: { assignmentId: string; status: string }[] };
+    expect(data.published).toBe(true);
+    revision = published.revision ?? revision;
+
+    const needsConfirm = await completeSession(coach, session.data.session.sessionId, {
+      requestId: "req-complete-no",
+      expectedRevision: revision,
+    });
+    expect(needsConfirm.ok).toBe(false);
+    if (needsConfirm.ok) return;
+    expect(needsConfirm.code).toBe("CONFIRM_INCOMPLETE");
+
+    const completed = await completeSession(coach, session.data.session.sessionId, {
+      requestId: "req-complete-yes",
+      expectedRevision: revision,
+      confirmIncomplete: true,
+    });
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) return;
+    expect(completed.data.status).toBe("COMPLETED");
+    revision = completed.revision ?? revision;
+
+    const view = await getSession(coach, session.data.session.sessionId);
+    expect(view.ok).toBe(true);
+    if (!view.ok) return;
+    expect(view.data.session.status).toBe("COMPLETED");
+    expect(view.data.assignments.some((row) => row.status === "PLANNED")).toBe(true);
+    expect(view.data.session.activeGenerationId).toBeTruthy();
+
+    const listed = await listSessions(coach, "req-complete-list");
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(previousCompletedSessions(listed.data.sessions, "other").some((row) => row.sessionId === session.data.session.sessionId)).toBe(true);
+    const active = listed.data.sessions.find((row) => row.status === "DRAFT" || row.status === "READY" || row.status === "IN_PROGRESS");
+    expect(saturdaySessionCta(active?.sessionId ?? null).kind).toBe("start");
+
+    const refusedSwap = await patchAssignment(coach, session.data.session.sessionId, data.assignments[0].assignmentId, {
+      requestId: "req-complete-swap",
+      expectedRevision: revision,
+      action: "set-volunteer",
+      volunteerId: data.assignments[0].assignmentId,
+    });
+    expect(refusedSwap.ok).toBe(false);
+    if (refusedSwap.ok) return;
+    expect(refusedSwap.code).toBe("SESSION_COMPLETED");
+
+    const refusedAttendance = await putAttendance(coach, session.data.session.sessionId, {
+      requestId: "req-complete-att",
+      expectedRevision: revision,
+      athleteId: view.data.attendance[0]?.athleteId,
+      present: false,
+    });
+    expect(refusedAttendance.ok).toBe(false);
+    if (refusedAttendance.ok) return;
+    expect(refusedAttendance.code).toBe("SESSION_COMPLETED");
   });
 });
 

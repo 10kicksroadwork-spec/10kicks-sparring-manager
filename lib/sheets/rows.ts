@@ -11,7 +11,7 @@ import type {
 } from "@/lib/repository/types";
 
 export const TAB_HEADERS = {
-  Athletes: ["athlete_id", "display_name", "weight_lbs", "skill", "aggression", "role_eligibility", "active", "coach_notes", "created_at", "updated_at"],
+  Athletes: ["athlete_id", "display_name", "weight_lbs", "skill", "aggression", "gender", "role_eligibility", "active", "coach_notes", "created_at", "updated_at"],
   Sessions: ["session_id", "date_local", "timezone", "status", "revision", "active_generation_id", "current_block_index", "settings_json", "created_by", "created_at", "updated_by", "updated_at"],
   Attendance: ["attendance_id", "session_id", "athlete_id", "assigned_role", "present", "availability_status", "weight_lbs_snapshot", "skill_snapshot", "aggression_snapshot", "checked_in_at", "updated_at"],
   Assignments: ["assignment_id", "session_id", "generation_id", "block_index", "location", "fighter_id", "volunteer_id", "status", "locked", "numeric_exception_id", "updated_at", "updated_by"],
@@ -99,6 +99,11 @@ export function parseAthleteRow(row: unknown[]): { athlete: Athlete } | { error:
   if (role !== "FIGHTER" && role !== "VOLUNTEER" && role !== "BOTH") {
     return { error: `Athletes row ${cells.athlete_id} has an invalid role` };
   }
+  const genderRaw = (cells.gender ?? "").trim().toUpperCase();
+  if (genderRaw !== "" && genderRaw !== "FEMALE" && genderRaw !== "MALE" && genderRaw !== "OTHER") {
+    return { error: `Athletes row ${cells.athlete_id} has an invalid gender` };
+  }
+  const gender = genderRaw === "" ? null : (genderRaw as "FEMALE" | "MALE" | "OTHER");
   return {
     athlete: {
       athleteId: cells.athlete_id,
@@ -106,6 +111,7 @@ export function parseAthleteRow(row: unknown[]): { athlete: Athlete } | { error:
       weightLbs: weight.value,
       skill: skill.value,
       aggression: aggression.value,
+      gender,
       roleEligibility: role,
       active,
       coachNotes: cells.coach_notes,
@@ -122,6 +128,7 @@ export function athleteToRow(athlete: Athlete): (string | number | boolean)[] {
     athlete.weightLbs ?? "",
     athlete.skill ?? "",
     athlete.aggression ?? "",
+    athlete.gender ?? "",
     athlete.roleEligibility,
     athlete.active,
     athlete.coachNotes,

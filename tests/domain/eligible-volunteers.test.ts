@@ -55,21 +55,31 @@ function twoFighterBoard(extraVolunteers: SessionAthlete[] = []) {
 }
 
 describe("eligibleVolunteersForAssignment", () => {
-  it("lists the current partner and other pair-eligible free volunteers", () => {
+  it("lists every checked-in volunteer with recommended and other groups", () => {
     const heavy = athlete("v-heavy", 250);
     const { fighters, volunteers, rows } = twoFighterBoard([heavy]);
     const options = eligibleVolunteersForAssignment(input(fighters, volunteers), rows, "a5");
-    // a5 is f1/v3 in block 5. Unused v5 is free; v4 is booked on a6; v1/v2 are at max 2.
-    expect(options.map((row) => row.volunteerId)).toEqual(["v3", "v5"]);
-    expect(options[0]?.current).toBe(true);
-    expect(options.some((row) => row.volunteerId === "v-heavy")).toBe(false);
+    // a5 is f1/v3 in block 5. Available: current v3 + free v5. Others stay listed disabled.
+    expect(options.map((row) => row.volunteerId).sort()).toEqual(["v-heavy", "v1", "v2", "v3", "v4", "v5"]);
+    const recommended = options.filter((row) => row.group === "recommended");
+    expect(recommended.map((row) => row.volunteerId)).toEqual(["v3", "v5"]);
+    expect(recommended.every((row) => row.available)).toBe(true);
+    expect(options.find((row) => row.volunteerId === "v-heavy")).toMatchObject({
+      group: "other",
+      available: false,
+    });
+    expect(options.find((row) => row.volunteerId === "v4")?.available).toBe(false);
+    expect(options.find((row) => row.volunteerId === "v4")?.reasons[0]).toMatch(/booked|cap|paired|rest/i);
   });
 
-  it("hides a volunteer already booked in the same block", () => {
+  it("keeps a same-block volunteer visible but unavailable", () => {
     const { fighters, volunteers, rows } = twoFighterBoard();
     const options = eligibleVolunteersForAssignment(input(fighters, volunteers), rows, "a1");
-    expect(options.some((row) => row.volunteerId === "v1" && row.current)).toBe(true);
-    expect(options.some((row) => row.volunteerId === "v2")).toBe(false);
+    expect(options.some((row) => row.volunteerId === "v1" && row.current && row.available)).toBe(true);
+    const booked = options.find((row) => row.volunteerId === "v2");
+    expect(booked).toBeTruthy();
+    expect(booked?.available).toBe(false);
+    expect(booked?.group).toBe("other");
   });
 
   it("returns nothing for locked or completed matches", () => {

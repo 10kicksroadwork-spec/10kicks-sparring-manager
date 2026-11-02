@@ -13,7 +13,16 @@ export async function listAthletes(actor: Actor, requestId = "read"): Promise<Se
 
 export async function createAthlete(
   actor: Actor,
-  input: { displayName: string; weightLbs: number; skill: number; aggression?: number | null; roleEligibility: Athlete["roleEligibility"]; coachNotes?: string; requestId: string },
+  input: {
+    displayName: string;
+    weightLbs: number;
+    skill: number;
+    aggression?: number | null;
+    gender?: Athlete["gender"];
+    roleEligibility: Athlete["roleEligibility"];
+    coachNotes?: string;
+    requestId: string;
+  },
 ): Promise<ServiceResult<{ athlete: Athlete }>> {
   const now = nowIso();
   const athlete: Athlete = {
@@ -22,6 +31,7 @@ export async function createAthlete(
     weightLbs: input.weightLbs,
     skill: input.skill,
     aggression: input.aggression ?? null,
+    gender: input.gender ?? null,
     roleEligibility: input.roleEligibility,
     active: true,
     coachNotes: input.coachNotes?.trim() ?? "",
@@ -46,7 +56,7 @@ export async function createAthlete(
 export async function updateAthlete(
   actor: Actor,
   athleteId: string,
-  patch: Partial<Pick<Athlete, "displayName" | "weightLbs" | "skill" | "aggression" | "roleEligibility" | "coachNotes" | "active">> & {
+  patch: Partial<Pick<Athlete, "displayName" | "weightLbs" | "skill" | "aggression" | "gender" | "roleEligibility" | "coachNotes" | "active">> & {
     requestId: string;
   },
 ): Promise<ServiceResult<{ athlete: Athlete }>> {
@@ -69,6 +79,7 @@ export async function updateAthlete(
         weightLbs: patch.weightLbs ?? existing.weightLbs,
         skill: patch.skill ?? existing.skill,
         aggression: patch.aggression ?? existing.aggression,
+        gender: patch.gender !== undefined ? patch.gender : existing.gender,
         roleEligibility: patch.roleEligibility ?? existing.roleEligibility,
         coachNotes: patch.coachNotes !== undefined ? patch.coachNotes : existing.coachNotes,
         active: patch.active ?? existing.active,
