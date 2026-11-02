@@ -4,6 +4,7 @@ const roleEligibility = z.enum(["FIGHTER", "VOLUNTEER", "BOTH"]);
 const sessionRole = z.enum(["FIGHTER", "VOLUNTEER"]);
 const location = z.enum(["MAIN_RING", "FLOOR_1", "FLOOR_2"]);
 const assignmentStatus = z.enum(["PLANNED", "IN_PROGRESS", "COMPLETED", "INTERRUPTED"]);
+const athleteGender = z.enum(["FEMALE", "MALE", "OTHER"]);
 
 export const mutationMeta = {
   expectedRevision: z.number().int().nonnegative(),
@@ -15,6 +16,7 @@ export const athleteCreateSchema = z.object({
   weightLbs: z.number().positive().max(500),
   skill: z.number().int().min(1).max(7),
   aggression: z.number().int().min(1).max(5).nullish(),
+  gender: athleteGender.nullish(),
   roleEligibility,
   coachNotes: z.string().trim().max(280).optional(),
 });
@@ -95,6 +97,13 @@ export const assignmentPatchSchema = z.object({
 export const blockCompleteSchema = z.object({
   ...mutationMeta,
   confirmBothRounds: z.literal(true),
+});
+
+/** Mark the whole Saturday session Completed (read-only history). */
+export const completeSessionSchema = z.object({
+  ...mutationMeta,
+  /** Required when any hard match is still PLANNED or IN_PROGRESS. */
+  confirmIncomplete: z.boolean().optional(),
 });
 
 export const confirmSchema = z.object({

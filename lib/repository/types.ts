@@ -1,6 +1,6 @@
-import type { Assignment, AssignmentStatus, Location, MatchingLimits, SaturdaySettings } from "@/lib/domain/types";
+import type { Assignment, AssignmentStatus, AthleteGender, Location, MatchingLimits, SaturdaySettings } from "@/lib/domain/types";
 
-export type { SaturdaySettings };
+export type { SaturdaySettings, AthleteGender };
 
 export type RoleEligibility = "FIGHTER" | "VOLUNTEER" | "BOTH";
 export type SessionRole = "FIGHTER" | "VOLUNTEER";
@@ -13,6 +13,8 @@ export type Athlete = {
   weightLbs: number | null;
   skill: number | null;
   aggression: number | null;
+  /** Optional soft preference field. Never inferred from names. */
+  gender: AthleteGender | null;
   roleEligibility: RoleEligibility;
   active: boolean;
   coachNotes: string;

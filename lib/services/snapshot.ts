@@ -37,13 +37,18 @@ export function fixedAssignments(rows: StoredAssignment[]): StoredAssignment[] {
   return rows.filter((row) => row.locked || row.status === "COMPLETED" || row.status === "IN_PROGRESS" || row.status === "INTERRUPTED");
 }
 
-function snapshotAthlete(row: Attendance, name: string): SessionAthlete {
+function snapshotAthlete(
+  row: Attendance,
+  name: string,
+  gender: SessionAthlete["gender"] = null,
+): SessionAthlete {
   return {
     athleteId: row.athleteId,
     displayName: name,
     weightLbs: row.weightLbsSnapshot,
     skill: row.skillSnapshot,
     aggression: row.aggressionSnapshot,
+    gender: gender ?? null,
   };
 }
 
@@ -58,14 +63,22 @@ export async function toScheduleInput(
     repo.readRestrictions(),
     repo.readOverrides(view.session.sessionId),
   ]);
-  const names = new Map(athletes.rows.map((athlete) => [athlete.athleteId, athlete.displayName]));
+  const roster = new Map(athletes.rows.map((athlete) => [athlete.athleteId, athlete]));
   const present = view.attendance.filter((row) => row.present);
   const unavailable = new Set(present.filter((row) => row.availabilityStatus !== "AVAILABLE").map((row) => row.athleteId));
-  const fighters = present.filter((row) => row.assignedRole === "FIGHTER").map((row) => snapshotAthlete(row, names.get(row.athleteId) || "Fighter"));
+  const fighters = present
+    .filter((row) => row.assignedRole === "FIGHTER")
+    .map((row) => {
+      const person = roster.get(row.athleteId);
+      return snapshotAthlete(row, person?.displayName || "Fighter", person?.gender ?? null);
+    });
   const fighterIds = new Set(fighters.map((fighter) => fighter.athleteId));
   const volunteers = present
     .filter((row) => row.assignedRole === "VOLUNTEER" && !fighterIds.has(row.athleteId))
-    .map((row) => snapshotAthlete(row, names.get(row.athleteId) || "Volunteer"));
+    .map((row) => {
+      const person = roster.get(row.athleteId);
+      return snapshotAthlete(row, person?.displayName || "Volunteer", person?.gender ?? null);
+    });
   const numericOverrides: NumericOverride[] = overrides.rows.map((row) => ({
     overrideId: row.overrideId,
     sessionId: row.sessionId,

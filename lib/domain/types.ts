@@ -40,6 +40,10 @@ export type Assignment = {
   approvedNumericExceptionId?: string;
 };
 
+/** Optional roster gender for a soft matching preference only. Never inferred from names. */
+export const ATHLETE_GENDERS = ["FEMALE", "MALE", "OTHER"] as const;
+export type AthleteGender = (typeof ATHLETE_GENDERS)[number];
+
 export type SessionAthlete = {
   athleteId: string;
   displayName: string;
@@ -47,6 +51,8 @@ export type SessionAthlete = {
   skill: number;
   /** Stored when a row has it. Matching and check-in ignore it. */
   aggression: number | null;
+  /** Optional. Soft same-gender preference only when both sides set; missing = no preference. */
+  gender?: AthleteGender | null;
 };
 
 /**

@@ -10,6 +10,7 @@ function athlete(id: string, name = id): Athlete {
     weightLbs: 150,
     skill: 4,
     aggression: null,
+    gender: null,
     roleEligibility: "BOTH",
     active: true,
     coachNotes: "",

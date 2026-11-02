@@ -65,6 +65,11 @@ function athleteFrom(row: Row): { athlete: Athlete } | { error: string } {
   if (role !== "FIGHTER" && role !== "VOLUNTEER" && role !== "BOTH") {
     return { error: `Athletes row ${athleteId} has an invalid role` };
   }
+  const genderRaw = text(row, "gender").trim().toUpperCase();
+  if (genderRaw !== "" && genderRaw !== "FEMALE" && genderRaw !== "MALE" && genderRaw !== "OTHER") {
+    return { error: `Athletes row ${athleteId} has an invalid gender` };
+  }
+  const gender = genderRaw === "" ? null : (genderRaw as "FEMALE" | "MALE" | "OTHER");
   return {
     athlete: {
       athleteId,
@@ -72,6 +77,7 @@ function athleteFrom(row: Row): { athlete: Athlete } | { error: string } {
       weightLbs: weight,
       skill,
       aggression,
+      gender,
       roleEligibility: role,
       active,
       coachNotes: text(row, "coach_notes"),

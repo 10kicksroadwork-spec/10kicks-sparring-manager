@@ -33,7 +33,14 @@ type Assignment = {
   status: "PLANNED" | "IN_PROGRESS" | "COMPLETED" | "INTERRUPTED";
   locked: boolean;
 };
-type SwapOption = { volunteerId: string; displayName: string; current: boolean; reasons: string[] };
+type SwapOption = {
+  volunteerId: string;
+  displayName: string;
+  current: boolean;
+  available?: boolean;
+  group?: "recommended" | "other";
+  reasons: string[];
+};
 type Person = { athleteId: string; displayName: string; assignedRole: "FIGHTER" | "VOLUNTEER"; availabilityStatus: string };
 type View = {
   session: { revision: number; status: string; updatedAt: string; activeGenerationId: string; settings: { timing: RoundTiming; hardRoundsPerSession: number } };
@@ -127,7 +134,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     if (readOnly) return;
     const volunteerId = swapChoice[match.assignmentId];
     if (!volunteerId || volunteerId === match.volunteerId) {
-      setError("Pick a different eligible volunteer for this match.");
+      setError("Pick a different partner for this match.");
       return;
     }
     const volunteerName = name(volunteerId);
@@ -136,7 +143,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     setError("");
     setNotice("");
     setToast("");
-    const result = await api(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, {
+    const result = await api<{ assignment: Assignment; warnings?: string[] }>(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, {
       method: "PATCH",
       body: JSON.stringify({
         requestId: newRequestId(),
@@ -149,8 +156,10 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     if (!result.ok) setError(result.error.message);
     else {
       setNotice(`Partner updated for ${name(match.fighterId)}.`);
+      const warningToast = result.data.warnings?.[0];
       const multiBlockToast = swapMultiBlockToastMessage(volunteerName, otherBlocks);
-      if (multiBlockToast) setToast(multiBlockToast);
+      if (warningToast) setToast(warningToast);
+      else if (multiBlockToast) setToast(multiBlockToast);
     }
     await reload();
   }
@@ -187,6 +196,35 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
       setError(lines.join(" ") || "The remaining rundown could not be rebuilt.");
     } else setNotice("Remaining matches rebuilt. Completed and locked matches stayed.");
     await reload();
+  }
+
+  async function completeSession() {
+    if (readOnly) return;
+    const unfinished = (view?.assignments ?? []).filter((row) => row.status === "PLANNED" || row.status === "IN_PROGRESS").length;
+    if (unfinished > 0) {
+      const ok = window.confirm(
+        `${unfinished} hard ${unfinished === 1 ? "match is" : "matches are"} still unfinished. Complete the session anyway? The card stays as-is and becomes read-only.`,
+      );
+      if (!ok) return;
+    }
+    setBusy(true);
+    setError("");
+    setNotice("");
+    const result = await api<{ status: string }>(`/api/sessions/${sessionId}/complete`, {
+      method: "POST",
+      body: JSON.stringify({
+        requestId: newRequestId(),
+        expectedRevision: revision,
+        confirmIncomplete: unfinished > 0,
+      }),
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error.message);
+      await reload();
+      return;
+    }
+    router.push("/");
   }
 
   return (
@@ -274,7 +312,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                           {canSwap ? (
                             <div className="mt-3 grid gap-2 border-t border-[var(--line)] pt-3" data-testid={`swap-${match.assignmentId}`}>
                               <label className="text-xs uppercase tracking-[0.14em] text-[var(--muted)]" htmlFor={`swap-select-${match.assignmentId}`}>
-                                Eligible partner
+                                Partner
                               </label>
                               <select
                                 id={`swap-select-${match.assignmentId}`}
@@ -284,11 +322,39 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                                 value={swapChoice[match.assignmentId] ?? match.volunteerId}
                                 onChange={(event) => setSwapChoice((prev) => ({ ...prev, [match.assignmentId]: event.target.value }))}
                               >
-                                {options.map((option) => (
-                                  <option key={option.volunteerId} value={option.volunteerId}>
-                                    {option.displayName}{option.current ? " (current)" : ""}
-                                  </option>
-                                ))}
+                                {(() => {
+                                  const recommended = options.filter((row) => (row.group ?? "recommended") === "recommended");
+                                  const other = options.filter((row) => (row.group ?? "recommended") === "other");
+                                  const labelFor = (option: SwapOption) => {
+                                    const hint =
+                                      !option.current && option.reasons[0] && option.reasons[0] !== "Within the current numeric limits."
+                                        ? ` — ${option.reasons[0]}`
+                                        : "";
+                                    return `${option.displayName}${option.current ? " (current)" : ""}${hint}`;
+                                  };
+                                  return (
+                                    <>
+                                      {recommended.length > 0 ? (
+                                        <optgroup label="Recommended">
+                                          {recommended.map((option) => (
+                                            <option key={option.volunteerId} value={option.volunteerId}>
+                                              {labelFor(option)}
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      ) : null}
+                                      {other.length > 0 ? (
+                                        <optgroup label="All Other Volunteers">
+                                          {other.map((option) => (
+                                            <option key={option.volunteerId} value={option.volunteerId}>
+                                              {labelFor(option)}
+                                            </option>
+                                          ))}
+                                        </optgroup>
+                                      ) : null}
+                                    </>
+                                  );
+                                })()}
                               </select>
                               <button
                                 className="tap"
@@ -300,7 +366,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                                 Swap partner
                               </button>
                               <p className="text-xs text-[var(--muted)]">
-                                Only volunteers who still fit limits, rest, and workload for this card. Free someone from another match first if you need them here.
+                                Recommended and All Other are both selectable. Notes are hints — the desk only blocks illegal cases like same-block double-booking or prohibited pairings.
                               </p>
                             </div>
                           ) : null}
@@ -333,6 +399,11 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
         {canDiscard ? <button className="tap tap-gold h-14" type="button" disabled={busy} data-testid="discard-rundown" onClick={() => void discard()}>Discard rundown and return to check-in</button> : null}
         {!readOnly ? <button className="tap h-14" type="button" disabled={busy} data-testid="regenerate" onClick={() => void regenerate()}>Regenerate unfinished</button> : null}
         {!readOnly ? <button className="tap h-12" type="button" disabled={busy} onClick={() => void act(`/api/sessions/${sessionId}/undo`, {})}>Undo last rundown</button> : null}
+        {!readOnly && view?.session.activeGenerationId ? (
+          <button className="tap tap-gold h-14" type="button" disabled={busy} data-testid="complete-session" onClick={() => void completeSession()}>
+            Complete Session
+          </button>
+        ) : null}
         <a className="tap h-12" href={backHref} data-testid="back-from-rundown">Back to check-in</a>
       </div>
     </Shell>

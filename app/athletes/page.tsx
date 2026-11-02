@@ -7,12 +7,15 @@ import { api, newRequestId } from "@/components/common/client";
 import { isReadyForHardMatch } from "@/lib/domain/profile";
 import { parseNumericDraft, validateRequiredNumericDraft } from "@/lib/ui/numeric-draft";
 
+type AthleteGender = "FEMALE" | "MALE" | "OTHER";
+
 type Athlete = {
   athleteId: string;
   displayName: string;
   weightLbs: number | null;
   skill: number | null;
   aggression: number | null;
+  gender: AthleteGender | null;
   roleEligibility: "FIGHTER" | "VOLUNTEER" | "BOTH";
   active: boolean;
   coachNotes: string;
@@ -21,7 +24,13 @@ type Athlete = {
 function ratingLine(athlete: Athlete): string {
   const weight = athlete.weightLbs === null ? "weight missing" : `${athlete.weightLbs} lb`;
   const skill = athlete.skill === null ? "skill missing" : `skill ${athlete.skill}`;
-  return `${weight} · ${skill}`;
+  const gender = athlete.gender ? ` · ${athlete.gender.toLowerCase()}` : "";
+  return `${weight} · ${skill}${gender}`;
+}
+
+function genderValue(raw: string): AthleteGender | null {
+  if (raw === "FEMALE" || raw === "MALE" || raw === "OTHER") return raw;
+  return null;
 }
 
 export default function AthletesPage() {
@@ -29,7 +38,15 @@ export default function AthletesPage() {
   const [query, setQuery] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [form, setForm] = useState({ displayName: "", weightLbs: "", skill: "3", roleEligibility: "BOTH", coachNotes: "" });
+  const [busyId, setBusyId] = useState("");
+  const [form, setForm] = useState({
+    displayName: "",
+    weightLbs: "",
+    skill: "3",
+    gender: "",
+    roleEligibility: "BOTH",
+    coachNotes: "",
+  });
 
   async function reload() {
     const result = await api<{ athletes: Athlete[]; corrupt: string[] }>("/api/athletes");
@@ -78,6 +95,7 @@ export default function AthletesPage() {
         displayName: form.displayName,
         weightLbs: parseNumericDraft(form.weightLbs),
         skill: parseNumericDraft(form.skill),
+        gender: genderValue(form.gender),
         roleEligibility: form.roleEligibility,
         coachNotes: form.coachNotes,
       }),
@@ -85,7 +103,27 @@ export default function AthletesPage() {
     if (!result.ok) setError(result.error.message);
     else {
       setNotice(`${result.data.athlete.displayName} saved.`);
-      setForm({ ...form, displayName: "", weightLbs: "", coachNotes: "" });
+      setForm({ ...form, displayName: "", weightLbs: "", coachNotes: "", gender: "" });
+      await reload();
+    }
+  }
+
+  async function saveGender(athlete: Athlete, raw: string) {
+    setError("");
+    setNotice("");
+    setBusyId(athlete.athleteId);
+    const result = await api<{ athlete: Athlete }>(`/api/athletes/${athlete.athleteId}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        requestId: newRequestId(),
+        expectedRevision: 0,
+        gender: genderValue(raw),
+      }),
+    });
+    setBusyId("");
+    if (!result.ok) setError(result.error.message);
+    else {
+      setNotice(`${result.data.athlete.displayName} gender updated.`);
       await reload();
     }
   }
@@ -93,7 +131,9 @@ export default function AthletesPage() {
   return (
     <Shell>
       <h1 className="font-display text-5xl leading-none">Roster</h1>
-      <p className="mt-2 text-[var(--muted)]">Names are labels. Weight and skill (1–7) are the match inputs. People missing either stay in the directory and cannot be checked into a hard session. Skip medical notes.</p>
+      <p className="mt-2 text-[var(--muted)]">
+        Names are labels. Weight and skill (1–7) are the match inputs. Optional gender is a soft preference only — never inferred from a name. People missing weight or skill stay in the directory and cannot be checked into a hard session. Skip medical notes.
+      </p>
       <label className="mt-4 block">
         <span className="sr-only">Search athletes</span>
         <input className="field" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search" aria-label="Search athletes" />
@@ -112,6 +152,22 @@ export default function AthletesPage() {
               <div className="mt-3 border-t border-[var(--line)] pt-3">
                 <p className="text-[var(--muted)]">{ratingLine(athlete)}</p>
                 {isReadyForHardMatch(athlete) ? null : <p className="mt-2 text-sm">Weight and skill are needed before checking this person into hard sparring.</p>}
+                <label className="mt-3 block text-sm">
+                  Gender (optional)
+                  <select
+                    className="field mt-1"
+                    aria-label={`Gender for ${athlete.displayName}`}
+                    data-testid={`athlete-gender-${athlete.athleteId}`}
+                    disabled={busyId === athlete.athleteId}
+                    value={athlete.gender ?? ""}
+                    onChange={(event) => void saveGender(athlete, event.target.value)}
+                  >
+                    <option value="">Not set</option>
+                    <option value="FEMALE">Female</option>
+                    <option value="MALE">Male</option>
+                    <option value="OTHER">Other</option>
+                  </select>
+                </label>
                 {athlete.coachNotes ? <p className="mt-2 text-sm">{athlete.coachNotes}</p> : null}
               </div>
             </details>
@@ -124,6 +180,14 @@ export default function AthletesPage() {
         <NumericField required allowDecimal inputMode="decimal" aria-label="Weight in pounds" placeholder="Weight (lb)" value={form.weightLbs} onChange={(weightLbs) => setForm({ ...form, weightLbs })} />
         <label>Skill
           <NumericField aria-label="Skill" inputMode="numeric" min={1} max={7} value={form.skill} onChange={(skill) => setForm({ ...form, skill })} />
+        </label>
+        <label>Gender (optional)
+          <select className="field" aria-label="Gender" value={form.gender} onChange={(event) => setForm({ ...form, gender: event.target.value })}>
+            <option value="">Not set</option>
+            <option value="FEMALE">Female</option>
+            <option value="MALE">Male</option>
+            <option value="OTHER">Other</option>
+          </select>
         </label>
         <label>Role
           <select className="field" aria-label="Role eligibility" value={form.roleEligibility} onChange={(event) => setForm({ ...form, roleEligibility: event.target.value })}>

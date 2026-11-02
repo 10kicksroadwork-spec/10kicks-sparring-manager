@@ -6,7 +6,7 @@ import {
   sortPlansByLeftPack,
 } from "./location-packing";
 import { evaluatePair } from "./matchmaking";
-import { pairCompatibility, scoreSchedule } from "./scoring";
+import { pairCompatibility, sameGenderVolunteerCount, scoreSchedule } from "./scoring";
 import { validateSchedule } from "./validator";
 import { canCoverWithoutVolunteerReuse } from "./volunteer-load";
 import {
@@ -686,6 +686,7 @@ function assignVolunteers(
   const candidatesFor = (slot: Slot): string[] => {
     const fighter = athletes.get(slot.fighterId);
     if (!fighter) return [];
+    const genderPool = sameGenderVolunteerCount(fighter, input.volunteers);
     const ids: { id: string; score: number }[] = [];
     for (const volunteer of input.volunteers) {
       if (volunteer.athleteId === slot.fighterId) continue;
@@ -706,7 +707,9 @@ function assignVolunteers(
       if (!decision.eligible) continue;
       ids.push({
         id: volunteer.athleteId,
-        score: pairCompatibility(fighter, volunteer, input.limits, input.scoringWeights),
+        score: pairCompatibility(fighter, volunteer, input.limits, input.scoringWeights, {
+          sameGenderPoolSize: genderPool,
+        }),
       });
     }
     // Prefer unused volunteers before reuse so thin pools do not leave people idle
