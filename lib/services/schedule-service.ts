@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { coachSwapWarningMessages, partitionCoachSwapDiagnostics } from "@/lib/domain/coach-swap";
 import { eligibleVolunteersForAssignment, type EligibleVolunteerOption } from "@/lib/domain/eligible-volunteers";
 import { coachNextSteps } from "@/lib/domain/diagnostics";
 import { assessMatchupFeasibility, type MatchupFeasibility } from "@/lib/domain/matchup-feasibility";
@@ -6,6 +7,7 @@ import {
   findMinimumFeasibleLimits,
   type MinimumFeasibleLimitsResult,
 } from "@/lib/domain/minimum-feasible-limits";
+import { evaluatePair } from "@/lib/domain/matchmaking";
 import { rundownStarted } from "@/lib/domain/rundown";
 import { compactScheduleBlocksToPrefix } from "@/lib/domain/location-packing";
 import { solveSchedule } from "@/lib/domain/solver";
@@ -18,7 +20,7 @@ import {
   type SolveResult,
 } from "@/lib/domain/types";
 import { validateSchedule } from "@/lib/domain/validator";
-import type { StoredAssignment } from "@/lib/repository/types";
+import type { StoredAssignment, StoredOverride } from "@/lib/repository/types";
 import { activeAssignments, loadSession, toScheduleInput, viewSignature } from "./snapshot";
 import { type Actor, fail, openStore, type ServiceResult, ServiceStop, withWrite } from "./support";
 import { can } from "@/lib/permissions";
@@ -320,7 +322,7 @@ export async function patchAssignment(
     status?: Assignment["status"];
     confirmBothRounds?: boolean;
   },
-): Promise<ServiceResult<{ assignment: StoredAssignment }>> {
+): Promise<ServiceResult<{ assignment: StoredAssignment; warnings?: string[] }>> {
   return withWrite({
     actor,
     action: "runSession",
@@ -339,6 +341,8 @@ export async function patchAssignment(
       const current = active.find((row) => row.assignmentId === assignmentId);
       if (!current) throw new ServiceStop(fail(404, "NOT_FOUND", "That match is not on the active rundown.", body.requestId));
       const next: StoredAssignment = { ...current, updatedAt: now, updatedBy: actor.email };
+      let coachOverride: StoredOverride | undefined;
+      let swapWarnings: string[] = [];
       if (body.action === "lock") next.locked = true;
       if (body.action === "unlock") next.locked = false;
       if (body.action === "set-location") {
@@ -371,29 +375,11 @@ export async function patchAssignment(
         if (!fighter || !volunteer) {
           throw new ServiceStop(fail(400, "NOT_ELIGIBLE", "That volunteer is not checked in for this session.", body.requestId));
         }
-        const eligible = eligibleVolunteersForAssignment(input, active, assignmentId);
-        const choice = eligible.find((row) => row.volunteerId === body.volunteerId && !row.current && row.available);
-        if (!choice) {
-          const blocked = eligible.find((row) => row.volunteerId === body.volunteerId && !row.current);
-          if (blocked) {
-            throw new ServiceStop(fail(400, "NOT_ELIGIBLE", blocked.reasons.join(" ") || "That volunteer is not available for this match.", body.requestId));
-          }
-          const { evaluatePair } = await import("@/lib/domain/matchmaking");
-          const decision = evaluatePair({
-            sessionId,
-            fighter,
-            volunteer,
-            limits: input.limits,
-            restrictions: input.restrictions,
-            overrides: input.overrides,
-          });
-          const reason = decision.eligible
-            ? "That swap breaks rest, workload, double-booking, or another Saturday rule."
-            : decision.reasons.join(" ");
-          throw new ServiceStop(fail(400, "NOT_ELIGIBLE", reason, body.requestId));
+        if (fighter.athleteId === volunteer.athleteId) {
+          throw new ServiceStop(fail(400, "NOT_ELIGIBLE", "A person cannot spar against themselves.", body.requestId));
         }
-        const { evaluatePair } = await import("@/lib/domain/matchmaking");
-        const decision = evaluatePair({
+
+        let decision = evaluatePair({
           sessionId,
           fighter,
           volunteer,
@@ -401,22 +387,94 @@ export async function patchAssignment(
           restrictions: input.restrictions,
           overrides: input.overrides,
         });
+        if (!decision.eligible && decision.reasonCodes.includes("EXPLICIT_EXCLUSION")) {
+          throw new ServiceStop(fail(400, "NOT_ELIGIBLE", decision.reasons.join(" "), body.requestId));
+        }
+        // Soft numeric limits: coach swap creates a one-session override.
+        if (!decision.eligible && (decision.reasonCodes.includes("WEIGHT_LBS") || decision.reasonCodes.includes("SKILL"))) {
+          coachOverride = {
+            overrideId: randomUUID(),
+            sessionId,
+            fighterId: fighter.athleteId,
+            volunteerId: volunteer.athleteId,
+            allowedNumericLimitsJson: JSON.stringify(input.limits),
+            coachEmail: actor.email,
+            reason: "Coach partner swap outside numeric limits.",
+            acknowledgedAt: now,
+            active: true,
+          };
+          input.overrides = [
+            ...input.overrides,
+            {
+              overrideId: coachOverride.overrideId,
+              sessionId: coachOverride.sessionId,
+              fighterId: coachOverride.fighterId,
+              volunteerId: coachOverride.volunteerId,
+              coachEmail: coachOverride.coachEmail,
+              reason: coachOverride.reason,
+              acknowledgedAt: coachOverride.acknowledgedAt,
+              active: coachOverride.active,
+            },
+          ];
+          decision = evaluatePair({
+            sessionId,
+            fighter,
+            volunteer,
+            limits: input.limits,
+            restrictions: input.restrictions,
+            overrides: input.overrides,
+          });
+          swapWarnings.push("Numeric limits waived for this coach swap.");
+        }
+        if (!decision.eligible) {
+          throw new ServiceStop(fail(400, "NOT_ELIGIBLE", decision.reasons.join(" ") || "That volunteer cannot be paired.", body.requestId));
+        }
         next.volunteerId = body.volunteerId;
-        next.approvedNumericExceptionId = decision.overrideId;
+        next.approvedNumericExceptionId = decision.overrideId ?? coachOverride?.overrideId;
       }
-      const input = await toScheduleInput(repo, view, session.activeGenerationId, active.map((row) => (row.assignmentId === assignmentId ? next : row)));
-      const validation = validateSchedule(input, active.map((row) => (row.assignmentId === assignmentId ? next : row)));
-      if (!validation.ok) {
+
+      const proposed = active.map((row) => (row.assignmentId === assignmentId ? next : row));
+      const input = await toScheduleInput(repo, view, session.activeGenerationId, proposed);
+      if (coachOverride) {
+        input.overrides = [
+          ...input.overrides.filter((row) => row.overrideId !== coachOverride!.overrideId),
+          {
+            overrideId: coachOverride.overrideId,
+            sessionId: coachOverride.sessionId,
+            fighterId: coachOverride.fighterId,
+            volunteerId: coachOverride.volunteerId,
+            coachEmail: coachOverride.coachEmail,
+            reason: coachOverride.reason,
+            acknowledgedAt: coachOverride.acknowledgedAt,
+            active: coachOverride.active,
+          },
+        ];
+      }
+      const validation = validateSchedule(input, proposed, { mode: body.action === "set-volunteer" ? "partial" : "full" });
+      if (body.action === "set-volunteer") {
+        const { hard, soft } = partitionCoachSwapDiagnostics(validation.errors);
+        if (hard.length > 0) {
+          throw new ServiceStop(
+            fail(400, "INVALID_SCHEDULE", hard[0]?.message ?? "That change is not allowed.", body.requestId, {
+              diagnostics: hard,
+            }),
+          );
+        }
+        swapWarnings = [...swapWarnings, ...coachSwapWarningMessages(soft, validation.warnings)];
+      } else if (!validation.ok) {
         throw new ServiceStop(fail(400, "INVALID_SCHEDULE", validation.errors[0]?.message ?? "That change breaks the Saturday rules.", body.requestId, {
           diagnostics: validation.errors,
         }));
       }
       const progressed = next.status === "COMPLETED" || next.status === "IN_PROGRESS" ? "IN_PROGRESS" : session.status;
       return {
-        data: { assignment: next },
+        data: { assignment: next, ...(swapWarnings.length ? { warnings: swapWarnings } : {}) },
         session: { ...session, status: session.status === "CANCELLED" ? session.status : progressed },
-        batch: { assignmentUpdates: [next] },
-        payload: { before: { volunteerId: current.volunteerId, location: current.location, status: current.status, locked: current.locked } },
+        batch: { assignmentUpdates: [next], ...(coachOverride ? { override: coachOverride } : {}) },
+        payload: {
+          before: { volunteerId: current.volunteerId, location: current.location, status: current.status, locked: current.locked },
+          ...(swapWarnings.length ? { warnings: swapWarnings } : {}),
+        },
       };
     },
   });

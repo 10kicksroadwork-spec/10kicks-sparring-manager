@@ -9,7 +9,11 @@ export type EligibleVolunteerOption = {
   volunteerId: string;
   displayName: string;
   current: boolean;
-  /** False when the coach cannot apply this swap (hard conflict). Still listed. */
+  /**
+   * Always true for the dropdown — coach may select Recommended or All Other.
+   * Brief conflict notes stay in `reasons` as hints; the API hard-blocks only
+   * truly illegal cases (same-block double-book, prohibited pairing, etc.).
+   */
   available: boolean;
   group: SwapVolunteerGroup;
   reasons: string[];
@@ -17,10 +21,8 @@ export type EligibleVolunteerOption = {
 
 /**
  * All checked-in volunteers for one planned/unlocked match, in two groups:
- * Recommended (ranking algorithm) then All Other (alphabetical).
- * Unavailable people stay visible and disabled with a brief reason.
- * Weight/skill may still pass via an existing numeric override; double-booking,
- * volunteer caps, duplicate pairings, and prohibited pairings stay hard blocks.
+ * Recommended (clean fits, ranking algorithm) then All Other (alphabetical).
+ * Everyone is selectable. Soft conflicts are hint notes only.
  */
 export function eligibleVolunteersForAssignment(
   input: ScheduleInput,
@@ -35,31 +37,31 @@ export function eligibleVolunteersForAssignment(
   if (!fighter) return [];
 
   const sameGenderPool = sameGenderVolunteerPool(fighter, input.volunteers);
-  const scored: Array<EligibleVolunteerOption & { score: number }> = [];
+  const scored: Array<EligibleVolunteerOption & { score: number; clean: boolean }> = [];
   for (const volunteer of input.volunteers) {
     scored.push(optionForVolunteer(input, assignments, current, fighter, volunteer, sameGenderPool));
   }
 
   const recommended = scored
-    .filter((row) => row.available)
+    .filter((row) => row.clean)
     .sort((a, b) => {
       if (a.current !== b.current) return a.current ? -1 : 1;
       if (b.score !== a.score) return b.score - a.score;
       return a.displayName.localeCompare(b.displayName);
     })
-    .map((row) => ({ ...row, group: "recommended" as const }));
+    .map((row) => ({ ...row, group: "recommended" as const, available: true }));
 
   const recommendedIds = new Set(recommended.map((row) => row.volunteerId));
   const other = scored
     .filter((row) => !recommendedIds.has(row.volunteerId))
     .sort((a, b) => a.displayName.localeCompare(b.displayName))
-    .map((row) => ({ ...row, group: "other" as const }));
+    .map((row) => ({ ...row, group: "other" as const, available: true }));
 
   return [...recommended, ...other].map((row) => ({
     volunteerId: row.volunteerId,
     displayName: row.displayName,
     current: row.current,
-    available: row.available,
+    available: true,
     group: row.group,
     reasons: row.reasons,
   }));
@@ -77,7 +79,7 @@ function optionForVolunteer(
   fighter: SessionAthlete,
   volunteer: SessionAthlete,
   sameGenderPoolSize: number,
-): EligibleVolunteerOption & { score: number } {
+): EligibleVolunteerOption & { score: number; clean: boolean } {
   const score = pairCompatibility(fighter, volunteer, input.limits, input.scoringWeights, { sameGenderPoolSize });
   const isCurrent = volunteer.athleteId === current.volunteerId;
   if (isCurrent) {
@@ -89,11 +91,12 @@ function optionForVolunteer(
       group: "recommended",
       reasons: ["Current partner on this match."],
       score,
+      clean: true,
     };
   }
 
   if ((input.unavailableIds ?? []).includes(volunteer.athleteId)) {
-    return unavailable(volunteer, score, "Not available this block.");
+    return hinted(volunteer, score, "Not available this block.");
   }
 
   const decision = evaluatePair({
@@ -105,7 +108,7 @@ function optionForVolunteer(
     overrides: input.overrides,
   });
   if (!decision.eligible) {
-    return unavailable(volunteer, score, briefPairReason(decision.reasons));
+    return hinted(volunteer, score, briefPairReason(decision.reasons));
   }
 
   const next: Assignment = {
@@ -116,7 +119,7 @@ function optionForVolunteer(
   const proposed = assignments.map((row) => (row.assignmentId === current.assignmentId ? next : row));
   const validation = validateSchedule(input, proposed, { mode: "partial" });
   if (!validation.ok) {
-    return unavailable(volunteer, score, briefValidationReason(validation.errors, volunteer.athleteId, current.assignmentId));
+    return hinted(volunteer, score, briefValidationReason(validation.errors, volunteer.athleteId, current.assignmentId));
   }
 
   return {
@@ -127,18 +130,20 @@ function optionForVolunteer(
     group: "recommended",
     reasons: decision.reasons,
     score,
+    clean: true,
   };
 }
 
-function unavailable(volunteer: SessionAthlete, score: number, reason: string): EligibleVolunteerOption & { score: number } {
+function hinted(volunteer: SessionAthlete, score: number, reason: string): EligibleVolunteerOption & { score: number; clean: boolean } {
   return {
     volunteerId: volunteer.athleteId,
     displayName: volunteer.displayName,
     current: false,
-    available: false,
+    available: true,
     group: "other",
     reasons: [reason],
     score,
+    clean: false,
   };
 }
 
@@ -148,13 +153,13 @@ function briefPairReason(reasons: string[]): string {
   if (/weight/i.test(joined)) return "Outside weight limit.";
   if (/skill/i.test(joined)) return "Outside skill limit.";
   if (/exception/i.test(joined)) return "Numeric exception incomplete.";
-  return reasons[0] ?? "Not eligible.";
+  return reasons[0] ?? "Note for coach.";
 }
 
 function briefValidationReason(errors: ConflictDiagnostic[], volunteerId: string, assignmentId: string): string {
   const relevant =
     errors.find((row) => row.volunteerId === volunteerId || row.assignmentId === assignmentId) ?? errors[0];
-  if (!relevant) return "Conflicts with this card.";
+  if (!relevant) return "Note for coach.";
   switch (relevant.code) {
     case "ATHLETE_DOUBLE_BOOKED":
       return "Already booked this block.";
@@ -168,7 +173,11 @@ function briefValidationReason(errors: ConflictDiagnostic[], volunteerId: string
     case "EXPLICIT_EXCLUSION":
       return "Prohibited pairing.";
     case "NUMERIC_LIMIT":
-      return /weight/i.test(relevant.message) ? "Outside weight limit." : /skill/i.test(relevant.message) ? "Outside skill limit." : "Outside match limits.";
+      return /weight/i.test(relevant.message)
+        ? "Outside weight limit."
+        : /skill/i.test(relevant.message)
+          ? "Outside skill limit."
+          : "Outside match limits.";
     default:
       return relevant.message.length > 72 ? `${relevant.message.slice(0, 69)}…` : relevant.message;
   }

@@ -651,8 +651,9 @@ describe("session writes", () => {
     const options = view.data.swaps?.[target.assignmentId] ?? [];
     expect(options.some((row) => row.current && row.volunteerId === target.volunteerId)).toBe(true);
     expect(options.length).toBeGreaterThan(2);
-    expect(options.some((row) => row.available === false)).toBe(true);
-    const replacement = options.find((row) => !row.current && row.available !== false);
+    expect(options.every((row) => row.available !== false)).toBe(true);
+    expect(options.some((row) => row.group === "other")).toBe(true);
+    const replacement = options.find((row) => !row.current && row.group === "recommended") ?? options.find((row) => !row.current);
     expect(replacement).toBeTruthy();
     if (!replacement) return;
     const swapped = await patchAssignment(coach, session.data.session.sessionId, target.assignmentId, {

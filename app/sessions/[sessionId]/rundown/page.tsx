@@ -133,13 +133,8 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
   async function swapVolunteer(match: Assignment) {
     if (readOnly) return;
     const volunteerId = swapChoice[match.assignmentId];
-    const selected = (view?.swaps?.[match.assignmentId] ?? []).find((row) => row.volunteerId === volunteerId);
     if (!volunteerId || volunteerId === match.volunteerId) {
       setError("Pick a different partner for this match.");
-      return;
-    }
-    if (selected && selected.available === false) {
-      setError(selected.reasons[0] || "That volunteer is not available for this match.");
       return;
     }
     const volunteerName = name(volunteerId);
@@ -148,7 +143,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     setError("");
     setNotice("");
     setToast("");
-    const result = await api(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, {
+    const result = await api<{ assignment: Assignment; warnings?: string[] }>(`/api/sessions/${sessionId}/assignments/${match.assignmentId}`, {
       method: "PATCH",
       body: JSON.stringify({
         requestId: newRequestId(),
@@ -161,8 +156,10 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
     if (!result.ok) setError(result.error.message);
     else {
       setNotice(`Partner updated for ${name(match.fighterId)}.`);
+      const warningToast = result.data.warnings?.[0];
       const multiBlockToast = swapMultiBlockToastMessage(volunteerName, otherBlocks);
-      if (multiBlockToast) setToast(multiBlockToast);
+      if (warningToast) setToast(warningToast);
+      else if (multiBlockToast) setToast(multiBlockToast);
     }
     await reload();
   }
@@ -326,17 +323,22 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                                 onChange={(event) => setSwapChoice((prev) => ({ ...prev, [match.assignmentId]: event.target.value }))}
                               >
                                 {(() => {
-                                  const recommended = options.filter((row) => (row.group ?? (row.available === false ? "other" : "recommended")) === "recommended");
-                                  const other = options.filter((row) => (row.group ?? (row.available === false ? "other" : "recommended")) === "other");
+                                  const recommended = options.filter((row) => (row.group ?? "recommended") === "recommended");
+                                  const other = options.filter((row) => (row.group ?? "recommended") === "other");
+                                  const labelFor = (option: SwapOption) => {
+                                    const hint =
+                                      !option.current && option.reasons[0] && option.reasons[0] !== "Within the current numeric limits."
+                                        ? ` — ${option.reasons[0]}`
+                                        : "";
+                                    return `${option.displayName}${option.current ? " (current)" : ""}${hint}`;
+                                  };
                                   return (
                                     <>
                                       {recommended.length > 0 ? (
                                         <optgroup label="Recommended">
                                           {recommended.map((option) => (
-                                            <option key={option.volunteerId} value={option.volunteerId} disabled={option.available === false}>
-                                              {option.displayName}
-                                              {option.current ? " (current)" : ""}
-                                              {option.available === false && option.reasons[0] ? ` — ${option.reasons[0]}` : ""}
+                                            <option key={option.volunteerId} value={option.volunteerId}>
+                                              {labelFor(option)}
                                             </option>
                                           ))}
                                         </optgroup>
@@ -344,10 +346,8 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                                       {other.length > 0 ? (
                                         <optgroup label="All Other Volunteers">
                                           {other.map((option) => (
-                                            <option key={option.volunteerId} value={option.volunteerId} disabled={option.available === false}>
-                                              {option.displayName}
-                                              {option.current ? " (current)" : ""}
-                                              {option.available === false && option.reasons[0] ? ` — ${option.reasons[0]}` : ""}
+                                            <option key={option.volunteerId} value={option.volunteerId}>
+                                              {labelFor(option)}
                                             </option>
                                           ))}
                                         </optgroup>
@@ -359,19 +359,14 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                               <button
                                 className="tap"
                                 type="button"
-                                disabled={
-                                  busy ||
-                                  !swapChoice[match.assignmentId] ||
-                                  swapChoice[match.assignmentId] === match.volunteerId ||
-                                  options.find((row) => row.volunteerId === swapChoice[match.assignmentId])?.available === false
-                                }
+                                disabled={busy || !swapChoice[match.assignmentId] || swapChoice[match.assignmentId] === match.volunteerId}
                                 data-testid={`swap-apply-${match.assignmentId}`}
                                 onClick={() => void swapVolunteer(match)}
                               >
                                 Swap partner
                               </button>
                               <p className="text-xs text-[var(--muted)]">
-                                Recommended partners rank by the usual match score. Unavailable people stay listed with a reason. Double-booking, caps, duplicate pairings, and prohibited pairings stay blocked.
+                                Recommended and All Other are both selectable. Notes are hints — the desk only blocks illegal cases like same-block double-booking or prohibited pairings.
                               </p>
                             </div>
                           ) : null}

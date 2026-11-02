@@ -55,31 +55,32 @@ function twoFighterBoard(extraVolunteers: SessionAthlete[] = []) {
 }
 
 describe("eligibleVolunteersForAssignment", () => {
-  it("lists every checked-in volunteer with recommended and other groups", () => {
+  it("lists every checked-in volunteer as selectable in recommended and other groups", () => {
     const heavy = athlete("v-heavy", 250);
     const { fighters, volunteers, rows } = twoFighterBoard([heavy]);
     const options = eligibleVolunteersForAssignment(input(fighters, volunteers), rows, "a5");
-    // a5 is f1/v3 in block 5. Available: current v3 + free v5. Others stay listed disabled.
+    // a5 is f1/v3 in block 5. Clean fits: current v3 + free v5. Others stay listed with hints.
     expect(options.map((row) => row.volunteerId).sort()).toEqual(["v-heavy", "v1", "v2", "v3", "v4", "v5"]);
+    expect(options.every((row) => row.available)).toBe(true);
     const recommended = options.filter((row) => row.group === "recommended");
     expect(recommended.map((row) => row.volunteerId)).toEqual(["v3", "v5"]);
-    expect(recommended.every((row) => row.available)).toBe(true);
     expect(options.find((row) => row.volunteerId === "v-heavy")).toMatchObject({
       group: "other",
-      available: false,
+      available: true,
     });
-    expect(options.find((row) => row.volunteerId === "v4")?.available).toBe(false);
+    expect(options.find((row) => row.volunteerId === "v4")?.available).toBe(true);
     expect(options.find((row) => row.volunteerId === "v4")?.reasons[0]).toMatch(/booked|cap|paired|rest/i);
   });
 
-  it("keeps a same-block volunteer visible but unavailable", () => {
+  it("keeps a same-block volunteer selectable with a hint", () => {
     const { fighters, volunteers, rows } = twoFighterBoard();
     const options = eligibleVolunteersForAssignment(input(fighters, volunteers), rows, "a1");
     expect(options.some((row) => row.volunteerId === "v1" && row.current && row.available)).toBe(true);
     const booked = options.find((row) => row.volunteerId === "v2");
     expect(booked).toBeTruthy();
-    expect(booked?.available).toBe(false);
+    expect(booked?.available).toBe(true);
     expect(booked?.group).toBe("other");
+    expect(booked?.reasons[0]).toMatch(/booked|cap|paired|rest/i);
   });
 
   it("returns nothing for locked or completed matches", () => {
