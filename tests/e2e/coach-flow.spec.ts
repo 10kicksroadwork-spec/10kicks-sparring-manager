@@ -55,6 +55,7 @@ test("coach checks in, generates, locks, completes, and reprints", async ({ page
   await page.goto("/dashboard");
   await expect(page.getByTestId("start-saturday")).toBeVisible();
   await expect(page.getByTestId("resume-saturday")).toHaveCount(0);
+  await expect(page.getByTestId("cancel-current-session")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Previous Sessions" })).toHaveCount(0);
   const startBox = await page.getByTestId("start-saturday").boundingBox();
   expect(startBox?.height ?? 0).toBeGreaterThanOrEqual(44);

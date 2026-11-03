@@ -684,8 +684,8 @@ describe("session writes", () => {
     expect(refused.code).toBe("MATCH_LOCKED");
   });
 
-  it("hard-deletes a previous session and related rows", async () => {
-    const { deleteSession } = await import("@/lib/services/session-service");
+  it("hard-deletes an unfinished session and related rows (Cancel Current Session)", async () => {
+    const { deleteSession, listSessions } = await import("@/lib/services/session-service");
     const session = await createSession(coach, { requestId: "req-del-session", dateLocal: "2099-04-01" });
     expect(session.ok).toBe(true);
     if (!session.ok) return;
@@ -701,6 +701,10 @@ describe("session writes", () => {
     });
     expect(checked.ok).toBe(true);
     if (!checked.ok) return;
+    const before = await getSession(coach, session.data.session.sessionId);
+    expect(before.ok).toBe(true);
+    if (!before.ok) return;
+    expect(["DRAFT", "READY", "IN_PROGRESS"]).toContain(before.data.session.status);
     const removed = await deleteSession(coach, session.data.session.sessionId, {
       requestId: "req-del-go",
       expectedRevision: checked.revision ?? session.data.session.revision,
@@ -717,6 +721,12 @@ describe("session writes", () => {
     expect(attendance.rows).toHaveLength(0);
     const assignments = await getRepository().readAssignments(session.data.session.sessionId);
     expect(assignments.rows).toHaveLength(0);
+    const overrides = await getRepository().readOverrides(session.data.session.sessionId);
+    expect(overrides.rows).toHaveLength(0);
+    const listed = await listSessions(coach, "req-del-list");
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) return;
+    expect(listed.data.sessions.some((row) => row.sessionId === session.data.session.sessionId)).toBe(false);
   });
 
   it("completes a session into Previous Sessions and refuses reopen mutations", async () => {

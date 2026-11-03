@@ -17,6 +17,11 @@ export function saturdaySessionCta(activeSessionId: string | null): SaturdayCta 
   return { kind: "start", label: "Start Saturday Session" };
 }
 
+/** Cancel Current Session appears under Resume for the same unfinished/active session. */
+export function showCancelCurrentSession(activeSessionId: string | null): boolean {
+  return saturdaySessionCta(activeSessionId).kind === "resume";
+}
+
 /** Completed past Saturdays for the check-in Previous Sessions list. */
 export function previousCompletedSessions(
   sessions: SessionSummary[],

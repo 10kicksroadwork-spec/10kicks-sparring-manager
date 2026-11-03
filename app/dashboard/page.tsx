@@ -4,11 +4,12 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Shell } from "@/components/common/Shell";
 import { api, newRequestId } from "@/components/common/client";
-import { saturdaySessionCta } from "@/lib/ui/saturday-nav";
+import { saturdaySessionCta, showCancelCurrentSession } from "@/lib/ui/saturday-nav";
 
 type Bootstrap = {
   actor: { email: string; role: string };
   activeSessionId: string | null;
+  activeSessionRevision: number | null;
   athleteCount: number;
   corrupt: string[];
   integrations: { supabase: string; lock: string; auth: string; store: string };
@@ -46,7 +47,35 @@ export default function DashboardPage() {
     router.push(`/sessions/${result.data.session.sessionId}/attendance`);
   }
 
+  async function cancelCurrentSession() {
+    if (!data?.activeSessionId || data.activeSessionRevision === null) return;
+    const ok = window.confirm(
+      "Cancel this Saturday session permanently? Check-in, rundown, and related data will be deleted. This cannot be undone.",
+    );
+    if (!ok) return;
+    setBusy(true);
+    setError("");
+    const result = await api<{ deleted: true; sessionId: string }>(`/api/sessions/${data.activeSessionId}`, {
+      method: "DELETE",
+      body: JSON.stringify({
+        requestId: newRequestId(),
+        expectedRevision: data.activeSessionRevision,
+        confirm: true,
+      }),
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.error.message);
+      // Refresh bootstrap so a concurrent complete/delete still lands on Start.
+      const refreshed = await api<Bootstrap>("/api/bootstrap");
+      if (refreshed.ok) setData(refreshed.data);
+      return;
+    }
+    setData({ ...data, activeSessionId: null, activeSessionRevision: null });
+  }
+
   const cta = data ? saturdaySessionCta(data.activeSessionId) : null;
+  const showCancel = data ? showCancelCurrentSession(data.activeSessionId) : false;
 
   return (
     <Shell>
@@ -73,6 +102,17 @@ export default function DashboardPage() {
             {busy ? "Starting…" : cta.label}
           </button>
         )}
+        {showCancel ? (
+          <button
+            className="tap h-14 text-lg"
+            type="button"
+            onClick={() => void cancelCurrentSession()}
+            disabled={busy || data?.activeSessionRevision === null}
+            data-testid="cancel-current-session"
+          >
+            {busy ? "Cancelling…" : "Cancel Current Session"}
+          </button>
+        ) : null}
       </div>
     </Shell>
   );

@@ -18,6 +18,7 @@ export async function GET(req: Request) {
         data: {
           actor,
           activeSessionId: null,
+          activeSessionRevision: null,
           athleteCount: 0,
           sessions: [],
           corrupt: [],
@@ -34,6 +35,7 @@ export async function GET(req: Request) {
     data: {
       actor,
       activeSessionId: active?.sessionId ?? null,
+      activeSessionRevision: active?.revision ?? null,
       athleteCount: athletes.data.athletes.length,
       sessions: sessions.data.sessions.slice(0, 12),
       corrupt: [...athletes.data.corrupt, ...sessions.data.corrupt],
