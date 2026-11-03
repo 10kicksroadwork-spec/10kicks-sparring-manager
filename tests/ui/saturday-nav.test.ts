@@ -4,6 +4,7 @@ import {
   previousCompletedSessions,
   rundownBackHref,
   saturdaySessionCta,
+  showCancelCurrentSession,
 } from "@/lib/ui/saturday-nav";
 
 describe("saturdaySessionCta", () => {
@@ -12,6 +13,7 @@ describe("saturdaySessionCta", () => {
       kind: "start",
       label: "Start Saturday Session",
     });
+    expect(showCancelCurrentSession(null)).toBe(false);
   });
 
   it("shows only Resume when an unfinished session exists", () => {
@@ -20,6 +22,7 @@ describe("saturdaySessionCta", () => {
       label: "Resume Saturday",
       sessionId: "active-1",
     });
+    expect(showCancelCurrentSession("active-1")).toBe(true);
   });
 });
 
