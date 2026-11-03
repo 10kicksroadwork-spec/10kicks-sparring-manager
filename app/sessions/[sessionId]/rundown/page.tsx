@@ -327,7 +327,7 @@ export default function RundownPage({ params }: { params: Promise<{ sessionId: s
                                   const other = options.filter((row) => (row.group ?? "recommended") === "other");
                                   const labelFor = (option: SwapOption) => {
                                     const hint =
-                                      !option.current && option.reasons[0] && option.reasons[0] !== "Within the current numeric limits."
+                                      option.reasons[0] && option.reasons[0] !== "Within the current numeric limits."
                                         ? ` — ${option.reasons[0]}`
                                         : "";
                                     return `${option.displayName}${option.current ? " (current)" : ""}${hint}`;

@@ -64,12 +64,25 @@ describe("eligibleVolunteersForAssignment", () => {
     expect(options.every((row) => row.available)).toBe(true);
     const recommended = options.filter((row) => row.group === "recommended");
     expect(recommended.map((row) => row.volunteerId)).toEqual(["v3", "v5"]);
+    // Neither recommended volunteer is on another hard block for this match.
+    expect(options.find((row) => row.volunteerId === "v3")?.reasons).toEqual([]);
+    expect(options.find((row) => row.volunteerId === "v5")?.reasons).toEqual([]);
     expect(options.find((row) => row.volunteerId === "v-heavy")).toMatchObject({
       group: "other",
       available: true,
     });
     expect(options.find((row) => row.volunteerId === "v4")?.available).toBe(true);
     expect(options.find((row) => row.volunteerId === "v4")?.reasons[0]).toMatch(/booked|cap|paired|rest/i);
+  });
+
+  it("annotates Recommended with other hard blocks when present", () => {
+    const { fighters, volunteers, rows } = twoFighterBoard();
+    const options = eligibleVolunteersForAssignment(input(fighters, volunteers), rows, "a1");
+    const current = options.find((row) => row.volunteerId === "v1" && row.current);
+    expect(current).toMatchObject({ group: "recommended", available: true, reasons: ["block 3"] });
+    const alsoOnFive = options.find((row) => row.volunteerId === "v4" && row.group === "recommended");
+    expect(alsoOnFive).toMatchObject({ available: true, reasons: ["block 5"] });
+    expect(options.find((row) => row.volunteerId === "v5" && row.group === "recommended")?.reasons).toEqual([]);
   });
 
   it("keeps a same-block volunteer selectable with a hint", () => {
