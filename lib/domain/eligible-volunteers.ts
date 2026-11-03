@@ -2,6 +2,7 @@ import { evaluatePair } from "./matchmaking";
 import { pairCompatibility } from "./scoring";
 import type { Assignment, ConflictDiagnostic, ScheduleInput, SessionAthlete } from "./types";
 import { validateSchedule } from "./validator";
+import { otherHardBlocksForVolunteer } from "./volunteer-load";
 
 export type SwapVolunteerGroup = "recommended" | "other";
 
@@ -89,7 +90,7 @@ function optionForVolunteer(
       current: true,
       available: true,
       group: "recommended",
-      reasons: ["Current partner on this match."],
+      reasons: recommendedBlockReasons(assignments, volunteer.athleteId, current.assignmentId),
       score,
       clean: true,
     };
@@ -128,10 +129,18 @@ function optionForVolunteer(
     current: false,
     available: true,
     group: "recommended",
-    reasons: decision.reasons,
+    reasons: recommendedBlockReasons(assignments, volunteer.athleteId, current.assignmentId),
     score,
     clean: true,
   };
+}
+
+/** Concise "blocks 2, 5" hint for Recommended; omit when they are not on another hard block. */
+function recommendedBlockReasons(assignments: Assignment[], volunteerId: string, assignmentId: string): string[] {
+  const blocks = otherHardBlocksForVolunteer(assignments, volunteerId, assignmentId);
+  if (blocks.length === 0) return [];
+  if (blocks.length === 1) return [`block ${blocks[0]}`];
+  return [`blocks ${blocks.join(", ")}`];
 }
 
 function hinted(volunteer: SessionAthlete, score: number, reason: string): EligibleVolunteerOption & { score: number; clean: boolean } {
